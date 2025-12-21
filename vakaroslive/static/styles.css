@@ -338,7 +338,8 @@ canvas {
 }
 
 .leaflet-tile-pane {
-  opacity: 0.9;
+  opacity: 0.45;
+  filter: contrast(0.7) brightness(0.85);
 }
 
 .chart {

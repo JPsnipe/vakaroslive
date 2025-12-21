@@ -264,25 +264,30 @@ function setMapLayer(type) {
   });
 
   if (type === "street") {
-    currentLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '© OpenStreetMap',
-      maxZoom: 19
+    // CartoDB Positron - fondo plano y claro para mejor visibilidad de líneas
+    currentLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+      attribution: '© OpenStreetMap, © CARTO',
+      maxZoom: 19,
+      className: 'map-tiles'
     });
     els.mapTypeStreet.classList.add("map-btn--active");
   } else if (type === "sat") {
     currentLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       attribution: '© Esri',
-      maxZoom: 19
+      maxZoom: 19,
+      opacity: 0.7,
+      className: 'map-tiles'
     });
     els.mapTypeSat.classList.add("map-btn--active");
   } else if (type === "nautical") {
     currentLayer = L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", {
       attribution: '© OpenSeaMap',
-      maxZoom: 18
+      maxZoom: 18,
+      className: 'map-tiles'
     });
-    // Añadir base OSM debajo
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '© OpenStreetMap',
+    // Añadir base clara debajo
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+      attribution: '© OpenStreetMap, © CARTO',
       maxZoom: 19
     }).addTo(map);
     els.mapTypeNautical.classList.add("map-btn--active");
@@ -961,9 +966,9 @@ function drawTrack() {
     ];
     if (!startLinePolyline) {
       startLinePolyline = L.polyline(latlngs, {
-        color: "#4dffb5",
-        weight: 3,
-        opacity: 0.85,
+        color: "#00ff9d",
+        weight: 5,
+        opacity: 1.0,
       }).addTo(map);
     } else {
       startLinePolyline.setLatLngs(latlngs);
@@ -981,10 +986,10 @@ function drawTrack() {
     ];
     if (!leewardGatePolyline) {
       leewardGatePolyline = L.polyline(latlngs, {
-        color: "#ffcc66",
-        weight: 2,
-        opacity: 0.55,
-        dashArray: "4,6",
+        color: "#ffdd00",
+        weight: 4,
+        opacity: 0.95,
+        dashArray: "8,8",
       }).addTo(map);
     } else {
       leewardGatePolyline.setLatLngs(latlngs);
@@ -1004,10 +1009,10 @@ function drawTrack() {
     ];
     if (!targetLinePolyline) {
       targetLinePolyline = L.polyline(latlngs, {
-        color: "#ffcc66",
-        weight: 2,
-        opacity: 0.75,
-        dashArray: "6,6",
+        color: "#ffaa00",
+        weight: 3,
+        opacity: 0.9,
+        dashArray: "10,8",
       }).addTo(map);
     } else {
       targetLinePolyline.setLatLngs(latlngs);
@@ -1049,10 +1054,10 @@ function drawTrack() {
   if (coursePoints.length > 1) {
     if (!coursePolyline) {
       coursePolyline = L.polyline(coursePoints, {
-        color: "#ccc",
-        weight: 1,
-        dashArray: "5,5",
-        opacity: 0.5,
+        color: "#ffffff",
+        weight: 3,
+        dashArray: "10,6",
+        opacity: 0.8,
       }).addTo(map);
     } else {
       coursePolyline.setLatLngs(coursePoints);
@@ -1103,10 +1108,10 @@ function drawLaylines() {
   if (lines.length > 0) {
     if (!laylinesPolyline) {
       laylinesPolyline = L.polyline(lines, {
-        color: "#ff5555",
-        weight: 1,
-        dashArray: "2,4",
-        opacity: 0.6,
+        color: "#ff3333",
+        weight: 4,
+        dashArray: "10,8",
+        opacity: 1.0,
       }).addTo(map);
     } else {
       laylinesPolyline.setLatLngs(lines);
