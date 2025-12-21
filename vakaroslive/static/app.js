@@ -5,7 +5,7 @@ function setText(el, value) {
   el.textContent = value;
 }
 
-const APP_VERSION = "v22";
+const APP_VERSION = "v23";
 
 const els = {
   status: $("status"),
@@ -61,6 +61,7 @@ const els = {
   bleConnectAll: $("bleConnectAll"),
   bleDisconnect: $("bleDisconnect"),
   bleInfo: $("bleInfo"),
+  bleDebug: $("bleDebug"),
   scan: $("scan"),
   scanInfo: $("scanInfo"),
   deviceList: $("deviceList"),
@@ -444,6 +445,22 @@ function supportsWebBluetooth() {
   return typeof navigator !== "undefined" && !!navigator.bluetooth;
 }
 
+function hexByte(b) {
+  return Number(b).toString(16).padStart(2, "0");
+}
+
+function dvPrefixHex(dv, maxBytes = 12) {
+  try {
+    if (!dv || typeof dv.byteLength !== "number") return null;
+    const n = Math.max(0, Math.min(dv.byteLength, maxBytes));
+    const parts = [];
+    for (let i = 0; i < n; i++) parts.push(hexByte(dv.getUint8(i)));
+    return parts.join("");
+  } catch {
+    return null;
+  }
+}
+
 function setBleUi(connected, info) {
   if (els.bleConnect) els.bleConnect.disabled = !!connected || !supportsWebBluetooth();
   if (els.bleDisconnect) els.bleDisconnect.disabled = !connected;
@@ -461,19 +478,49 @@ function refreshBleInfoTelemetryHint() {
   if (!bleClient || !bleClient.server?.connected) return;
 
   const base = bleInfoBaseText || "Conectado";
-  const lastTs = Math.max(bleClient.lastMainTs || 0, bleClient.lastCompactTs || 0);
-  if (!lastTs) {
+  const lastRxTs = Math.max(bleClient.lastMainRxTs || 0, bleClient.lastCompactRxTs || 0);
+  const lastOkTs = Math.max(bleClient.lastMainOkTs || 0, bleClient.lastCompactOkTs || 0);
+  if (!lastRxTs) {
     els.bleInfo.textContent = `${base} · esperando datos...`;
     return;
   }
-
-  const ageMs = Date.now() - lastTs;
+  if (!lastOkTs) {
+    els.bleInfo.textContent = `${base} · datos no interpretados`;
+    return;
+  }
+  const ageMs = Date.now() - lastOkTs;
   if (Number.isFinite(ageMs) && ageMs > 2200) {
     els.bleInfo.textContent = `${base} · sin datos (${Math.round(ageMs / 1000)}s)`;
     return;
   }
-
   els.bleInfo.textContent = base;
+}
+
+function refreshBleDebugLine() {
+  if (!els.bleDebug) return;
+  if (!supportsWebBluetooth()) {
+    setText(els.bleDebug, "BLE: Web Bluetooth no disponible");
+    return;
+  }
+  if (!bleClient || !bleClient.server?.connected) {
+    setText(els.bleDebug, "BLE: -");
+    return;
+  }
+  const fmtType = (t) => (typeof t === "number" ? `0x${hexByte(t)}` : "—");
+  const fmtLen = (n) => (typeof n === "number" ? String(n) : "—");
+  const rxM = bleClient.rxMainCount || 0;
+  const okM = bleClient.okMainCount || 0;
+  const rxC = bleClient.rxCompactCount || 0;
+  const okC = bleClient.okCompactCount || 0;
+  const main = `${fmtType(bleClient.lastMainType)}/${fmtLen(bleClient.lastMainLen)} ok ${okM}/${rxM}`;
+  const compact = `${fmtType(bleClient.lastCompactType)}/${fmtLen(bleClient.lastCompactLen)} ok ${okC}/${rxC}`;
+  let extra = "";
+  if (rxM + rxC > 0 && okM + okC === 0) {
+    const mh = bleClient.lastMainHeadHex ? ` m:${bleClient.lastMainHeadHex}` : "";
+    const ch = bleClient.lastCompactHeadHex ? ` c:${bleClient.lastCompactHeadHex}` : "";
+    extra = `${mh}${ch}`;
+  }
+  setText(els.bleDebug, `BLE main ${main} · compact ${compact}${extra}`);
 }
 
 function loadLocalMarks() {
@@ -1612,7 +1659,17 @@ function applyBlePartialState(partial) {
   applyState(merged);
 }
 
-function parseMainPacket(dataView) {
+function dvSubView(dv, offset) {
+  try {
+    if (!dv || typeof dv.byteLength !== "number") return null;
+    if (!Number.isFinite(offset) || offset < 0 || offset > dv.byteLength) return null;
+    return new DataView(dv.buffer, dv.byteOffset + offset, dv.byteLength - offset);
+  } catch {
+    return null;
+  }
+}
+
+function parseMainPacketInner(dataView) {
   const len = dataView.byteLength;
   if (len < 20) return null;
   const msgType = dataView.getUint8(0);
@@ -1654,7 +1711,24 @@ function parseMainPacket(dataView) {
   };
 }
 
-function parseCompactPacket(dataView) {
+function parseMainPacket(dataView) {
+  const len = dataView.byteLength;
+  if (len < 20) return null;
+  const direct = parseMainPacketInner(dataView);
+  if (direct) return direct;
+
+  // Fallback: algunos stacks/BLE capturas incluyen 1-3 bytes de prefijo.
+  for (let off = 1; off <= Math.min(3, len - 20); off++) {
+    if (dataView.getUint8(off) !== 0x02) continue;
+    const view = dvSubView(dataView, off);
+    if (!view) continue;
+    const parsed = parseMainPacketInner(view);
+    if (parsed) return { ...parsed, offset: off };
+  }
+  return null;
+}
+
+function parseCompactPacketInner(dataView) {
   const len = dataView.byteLength;
   if (len < 6) return null;
   const msgType = dataView.getUint8(0);
@@ -1674,6 +1748,22 @@ function parseCompactPacket(dataView) {
   };
 }
 
+function parseCompactPacket(dataView) {
+  const len = dataView.byteLength;
+  if (len < 6) return null;
+  const direct = parseCompactPacketInner(dataView);
+  if (direct) return direct;
+
+  for (let off = 1; off <= Math.min(3, len - 6); off++) {
+    if (dataView.getUint8(off) !== 0xfe) continue;
+    const view = dvSubView(dataView, off);
+    if (!view) continue;
+    const parsed = parseCompactPacketInner(view);
+    if (parsed) return { ...parsed, offset: off };
+  }
+  return null;
+}
+
 class AtlasWebBleClient {
   constructor() {
     this.device = null;
@@ -1684,6 +1774,23 @@ class AtlasWebBleClient {
     this.pollInFlight = false;
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
+    this.noDataTimer = null;
+
+    this.lastMainRxTs = 0;
+    this.lastCompactRxTs = 0;
+    this.lastMainOkTs = 0;
+    this.lastCompactOkTs = 0;
+    this.rxMainCount = 0;
+    this.okMainCount = 0;
+    this.rxCompactCount = 0;
+    this.okCompactCount = 0;
+    this.lastMainType = null;
+    this.lastMainLen = null;
+    this.lastMainHeadHex = null;
+    this.lastCompactType = null;
+    this.lastCompactLen = null;
+    this.lastCompactHeadHex = null;
+
     this.onDisconnected = this.onDisconnected.bind(this);
     this.onMain = this.onMain.bind(this);
     this.onCompact = this.onCompact.bind(this);
@@ -1691,6 +1798,26 @@ class AtlasWebBleClient {
 
   async connect(options = {}) {
     if (!supportsWebBluetooth()) throw new Error("Web Bluetooth no disponible");
+    this.lastMainTs = 0;
+    this.lastCompactTs = 0;
+    this.lastMainRxTs = 0;
+    this.lastCompactRxTs = 0;
+    this.lastMainOkTs = 0;
+    this.lastCompactOkTs = 0;
+    this.rxMainCount = 0;
+    this.okMainCount = 0;
+    this.rxCompactCount = 0;
+    this.okCompactCount = 0;
+    this.lastMainType = null;
+    this.lastMainLen = null;
+    this.lastMainHeadHex = null;
+    this.lastCompactType = null;
+    this.lastCompactLen = null;
+    this.lastCompactHeadHex = null;
+    if (this.noDataTimer) {
+      clearTimeout(this.noDataTimer);
+      this.noDataTimer = null;
+    }
     setBleUi(false, "Selecciona el Atlas 2…");
 
     // Algunos firmwares no anuncian el servicio propietario hasta estar conectados.
@@ -1768,6 +1895,7 @@ class AtlasWebBleClient {
 
       await this.startNotifications();
       this.startPolling();
+      this.startNoDataWatchdog();
       return;
     }
 
@@ -1780,13 +1908,27 @@ class AtlasWebBleClient {
 
   onMain(evt) {
     const dv = evt.target.value;
+    const now = Date.now();
+    this.rxMainCount++;
+    this.lastMainRxTs = now;
+    try {
+      this.lastMainLen = dv?.byteLength ?? null;
+      this.lastMainType =
+        typeof dv?.byteLength === "number" && dv.byteLength >= 1 ? dv.getUint8(0) : null;
+      this.lastMainHeadHex = dvPrefixHex(dv, 14);
+    } catch {
+      // ignore
+    }
     const parsed = parseMainPacket(dv);
     if (!parsed) return;
-    this.lastMainTs = Date.now();
+    this.okMainCount++;
+    this.lastMainOkTs = now;
+    this.lastMainTs = now;
     applyBlePartialState({
       connected: true,
       device_address: this.device?.name || "Atlas",
       last_event_ts_ms: parsed.ts_ms,
+      last_error: null,
       latitude: parsed.latitude ?? lastState?.latitude ?? null,
       longitude: parsed.longitude ?? lastState?.longitude ?? null,
       heading_deg: parsed.heading_deg ?? lastState?.heading_deg ?? null,
@@ -1801,9 +1943,22 @@ class AtlasWebBleClient {
 
   onCompact(evt) {
     const dv = evt.target.value;
+    const now = Date.now();
+    this.rxCompactCount++;
+    this.lastCompactRxTs = now;
+    try {
+      this.lastCompactLen = dv?.byteLength ?? null;
+      this.lastCompactType =
+        typeof dv?.byteLength === "number" && dv.byteLength >= 1 ? dv.getUint8(0) : null;
+      this.lastCompactHeadHex = dvPrefixHex(dv, 14);
+    } catch {
+      // ignore
+    }
     const parsed = parseCompactPacket(dv);
     if (!parsed) return;
-    this.lastCompactTs = Date.now();
+    this.okCompactCount++;
+    this.lastCompactOkTs = now;
+    this.lastCompactTs = now;
     const decodedSog = decodeSogKnFromCompactField2(parsed.field_2 ?? null, lastDerivedSogKn);
     if (typeof decodedSog === "number") {
       lastAtlasSogTsMs = parsed.ts_ms;
@@ -1812,11 +1967,39 @@ class AtlasWebBleClient {
       connected: true,
       device_address: this.device?.name || "Atlas",
       last_event_ts_ms: parsed.ts_ms,
+      last_error: null,
       heading_compact_deg: parsed.heading_deg ?? null,
       sog_knots: typeof decodedSog === "number" ? decodedSog : (lastState?.sog_knots ?? null),
       compact_field_2: parsed.field_2 ?? null,
       compact_raw_len: parsed.raw_len ?? null,
     });
+  }
+
+  startNoDataWatchdog() {
+    if (this.noDataTimer) {
+      clearTimeout(this.noDataTimer);
+      this.noDataTimer = null;
+    }
+    this.noDataTimer = setTimeout(() => {
+      try {
+        if (!this.server?.connected) return;
+        const okTs = Math.max(this.lastMainOkTs || 0, this.lastCompactOkTs || 0);
+        if (okTs) return;
+        const rxTs = Math.max(this.lastMainRxTs || 0, this.lastCompactRxTs || 0);
+        const tip =
+          "Cierra/forza detención de Vakaros Connect y vuelve a conectar (normalmente solo 1 app recibe telemetría).";
+        const detail = rxTs
+          ? `Datos no interpretados (main ${this.lastMainType !== null ? `0x${hexByte(this.lastMainType)}` : "—"}/${this.lastMainLen ?? "—"}; compact ${this.lastCompactType !== null ? `0x${hexByte(this.lastCompactType)}` : "—"}/${this.lastCompactLen ?? "—"}).`
+          : "No llegan paquetes BLE.";
+        applyBlePartialState({
+          connected: true,
+          device_address: this.device?.name || "Atlas",
+          last_error: `Conectado pero sin telemetría. ${detail} ${tip}`,
+        });
+      } catch {
+        // ignore
+      }
+    }, 6000);
   }
 
   async startNotifications() {
@@ -1826,8 +2009,7 @@ class AtlasWebBleClient {
         await this.mainChar.startNotifications();
         try {
           const v = await this.mainChar.readValue();
-          const parsed = parseMainPacket(v);
-          if (parsed) this.onMain({ target: { value: v } });
+          this.onMain({ target: { value: v } });
         } catch {
           // ignore
         }
@@ -1841,8 +2023,7 @@ class AtlasWebBleClient {
         await this.compactChar.startNotifications();
         try {
           const v = await this.compactChar.readValue();
-          const parsed = parseCompactPacket(v);
-          if (parsed) this.onCompact({ target: { value: v } });
+          this.onCompact({ target: { value: v } });
         } catch {
           // ignore
         }
@@ -1864,13 +2045,11 @@ class AtlasWebBleClient {
       try {
         if (staleMain && this.mainChar) {
           const v = await this.mainChar.readValue();
-          const parsed = parseMainPacket(v);
-          if (parsed) this.onMain({ target: { value: v } });
+          this.onMain({ target: { value: v } });
         }
         if (staleCompact && this.compactChar) {
           const v = await this.compactChar.readValue();
-          const parsed = parseCompactPacket(v);
-          if (parsed) this.onCompact({ target: { value: v } });
+          this.onCompact({ target: { value: v } });
         }
       } catch {
         // ignore
@@ -1884,6 +2063,10 @@ class AtlasWebBleClient {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.noDataTimer) {
+      clearTimeout(this.noDataTimer);
+      this.noDataTimer = null;
     }
     try {
       if (this.mainChar) this.mainChar.removeEventListener("characteristicvaluechanged", this.onMain);
@@ -2151,7 +2334,11 @@ if (document?.title?.startsWith("VakarosLive")) {
 initCardCollapsing();
 initMap();
 setBleUi(false, "—");
-setInterval(() => refreshBleInfoTelemetryHint(), 900);
+refreshBleDebugLine();
+setInterval(() => {
+  refreshBleInfoTelemetryHint();
+  refreshBleDebugLine();
+}, 900);
 
 // Estado inicial (sin backend)
 localMarks = ensureMarksShape(loadLocalMarks() || {});
