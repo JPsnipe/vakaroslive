@@ -95,6 +95,7 @@ let lastDerivedSogKn = null;
 let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
 let lastAtlasSogTsMs = 0;
+let bleInfoBaseText = null;
 
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
@@ -445,8 +446,31 @@ function setBleUi(connected, info) {
   if (els.bleDisconnect) els.bleDisconnect.disabled = !connected;
   if (els.bleInfo) {
     if (!supportsWebBluetooth()) els.bleInfo.textContent = "Web Bluetooth no disponible";
-    else els.bleInfo.textContent = info || (connected ? "Conectado" : "—");
+    else {
+      bleInfoBaseText = info || (connected ? "Conectado" : "—");
+      els.bleInfo.textContent = bleInfoBaseText;
+    }
   }
+}
+
+function refreshBleInfoTelemetryHint() {
+  if (!supportsWebBluetooth() || !els.bleInfo) return;
+  if (!bleClient || !bleClient.server?.connected) return;
+
+  const base = bleInfoBaseText || "Conectado";
+  const lastTs = Math.max(bleClient.lastMainTs || 0, bleClient.lastCompactTs || 0);
+  if (!lastTs) {
+    els.bleInfo.textContent = `${base} · esperando datos...`;
+    return;
+  }
+
+  const ageMs = Date.now() - lastTs;
+  if (Number.isFinite(ageMs) && ageMs > 2200) {
+    els.bleInfo.textContent = `${base} · sin datos (${Math.round(ageMs / 1000)}s)`;
+    return;
+  }
+
+  els.bleInfo.textContent = base;
 }
 
 function loadLocalMarks() {
@@ -1795,16 +1819,30 @@ class AtlasWebBleClient {
   async startNotifications() {
     if (this.mainChar) {
       try {
-        await this.mainChar.startNotifications();
         this.mainChar.addEventListener("characteristicvaluechanged", this.onMain);
+        await this.mainChar.startNotifications();
+        try {
+          const v = await this.mainChar.readValue();
+          const parsed = parseMainPacket(v);
+          if (parsed) this.onMain({ target: { value: v } });
+        } catch {
+          // ignore
+        }
       } catch {
         // ignore
       }
     }
     if (this.compactChar) {
       try {
-        await this.compactChar.startNotifications();
         this.compactChar.addEventListener("characteristicvaluechanged", this.onCompact);
+        await this.compactChar.startNotifications();
+        try {
+          const v = await this.compactChar.readValue();
+          const parsed = parseCompactPacket(v);
+          if (parsed) this.onCompact({ target: { value: v } });
+        } catch {
+          // ignore
+        }
       } catch {
         // ignore
       }
@@ -2105,6 +2143,7 @@ if ("serviceWorker" in navigator) {
 initCardCollapsing();
 initMap();
 setBleUi(false, "—");
+setInterval(() => refreshBleInfoTelemetryHint(), 900);
 
 // Estado inicial (sin backend)
 localMarks = ensureMarksShape(loadLocalMarks() || {});
