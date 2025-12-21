@@ -1,160 +1,177 @@
 <!doctype html>
 <html lang="es">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0b1220" />
-    <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./leaflet.css" />
-    <link rel="stylesheet" href="./styles.css" />
-    <title>VakarosLive</title>
-  </head>
-  <body>
-    <header class="header">
-      <div class="title">VakarosLive</div>
-      <div id="status" class="status status--disconnected">Desconectado</div>
-    </header>
 
-    <main class="grid">
-      <section class="card">
-        <div class="card__title">Rumbo</div>
-        <div class="big" id="heading">—</div>
-        <div class="muted">
-          Main: <span id="headingMain">—</span> · Compact: <span id="headingCompact">—</span>
-        </div>
-      </section>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b1220" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./leaflet.css" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>VakarosLive</title>
+</head>
 
-      <section class="card">
-        <div class="card__title">Posición</div>
-        <div class="kv"><span class="k">Lat</span><span class="v" id="lat">—</span></div>
-        <div class="kv"><span class="k">Lon</span><span class="v" id="lon">—</span></div>
-      </section>
+<body>
+  <header class="header">
+    <div class="title">VakarosLive</div>
+    <div id="status" class="status status--disconnected">Desconectado</div>
+  </header>
 
-      <section class="card">
-        <div class="card__title">Velocidad</div>
-        <div class="big" id="sog">—</div>
-        <div class="muted">COG: <span id="cog">—</span></div>
-      </section>
+  <main class="grid">
+    <section class="card card--wide">
+      <div class="card__title">Navegación</div>
+      <div class="nav2">
+        <div class="nav2__block">
+          <div class="muted">HDG (mag)</div>
+          <div class="big" id="navHdg">—</div>
+        </div>
+        <div class="nav2__block">
+          <div class="muted">SOG</div>
+          <div class="big" id="navSog">—</div>
+        </div>
+      </div>
+      <div class="metrics metrics--4">
+        <div class="kv"><span class="k">COG</span><span class="v" id="navCog">—</span></div>
+        <div class="kv"><span class="k">Δ (COG-HDG)</span><span class="v" id="navDelta">—</span></div>
+        <div class="kv"><span class="k">Fuente</span><span class="v" id="navSrc">—</span></div>
+        <div class="kv"><span class="k">Última</span><span class="v" id="navLast">—</span></div>
+      </div>
+    </section>
 
-      <section class="card">
-        <div class="card__title">Marca</div>
-        <div class="row">
-          <button id="setMark" class="btn">Guardar marca</button>
-          <button id="clearMark" class="btn btn--ghost">Borrar</button>
-        </div>
-        <div class="kv"><span class="k">Dist</span><span class="v" id="markDist">—</span></div>
-        <div class="kv"><span class="k">BRG</span><span class="v" id="markBrg">—</span></div>
-      </section>
+    <section class="card">
+      <div class="card__title">Marca</div>
+      <div class="row">
+        <button id="setMark" class="btn">Guardar marca</button>
+        <button id="clearMark" class="btn btn--ghost">Borrar</button>
+      </div>
+      <div class="kv"><span class="k">Dist</span><span class="v" id="markDist">—</span></div>
+      <div class="kv"><span class="k">BRG</span><span class="v" id="markBrg">—</span></div>
+    </section>
 
-      <section class="card">
-        <div class="card__title">Extra</div>
-        <div class="kv"><span class="k">F4</span><span class="v" id="f4">—</span></div>
-        <div class="kv"><span class="k">F5</span><span class="v" id="f5">—</span></div>
-        <div class="kv"><span class="k">F6</span><span class="v" id="f6">—</span></div>
-        <div class="kv"><span class="k">C2</span><span class="v" id="c2">—</span></div>
-        <div class="kv"><span class="k">RSV</span><span class="v mono" id="reserved">—</span></div>
-        <div class="kv"><span class="k">Tail</span><span class="v mono" id="tail">—</span></div>
-      </section>
+    <section class="card card--wide">
+      <div class="card__title">Actitud (Atlas)</div>
+      <div class="metrics metrics--4">
+        <div class="kv"><span class="k">Heel</span><span class="v" id="heel">—</span></div>
+        <div class="kv"><span class="k">Pitch</span><span class="v" id="pitch">—</span></div>
+        <div class="kv"><span class="k">Field 6</span><span class="v" id="field6">—</span></div>
+        <div class="kv"><span class="k">Compact 2</span><span class="v" id="compact2">—</span></div>
+      </div>
+      <div class="muted">Nota: campos por confirmar; se muestran tal cual.</div>
+    </section>
 
-      <section class="card card--wide">
-        <div class="card__title">Balizas</div>
-        <div class="row">
-          <button id="setWindward" class="btn">Set barlovento</button>
-          <button id="setLeewardPort" class="btn">Set sotavento P</button>
-          <button id="setLeewardStarboard" class="btn">Set sotavento S</button>
-          <button id="clearRaceMarks" class="btn btn--ghost">Borrar balizas</button>
+    <section class="card card--wide">
+      <div class="card__title">Balizas</div>
+      <div class="row">
+        <span class="muted">Tipo</span>
+        <select id="courseType" class="select" style="width:auto">
+          <option value="W/L">Barlovento/Sotavento</option>
+          <option value="Triangle">Triángulo</option>
+          <option value="Trapezoid">Trapecio</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="setWindward" class="btn">Set barlovento</button>
+        <button id="setLeewardPort" class="btn">Set sotavento P</button>
+        <button id="setLeewardStarboard" class="btn">Set sotavento S</button>
+        <button id="setWing" class="btn">Set wing</button>
+        <button id="setReach" class="btn">Set reach</button>
+        <button id="clearRaceMarks" class="btn btn--ghost">Borrar balizas</button>
+      </div>
+      <div class="row">
+        <span class="muted">Objetivo</span>
+        <select id="targetSelect" class="select">
+          <option value="">—</option>
+          <option value="mark">Marca</option>
+          <option value="windward">Barlovento</option>
+          <option value="leeward_gate">Sotavento (puerta)</option>
+          <option value="leeward_port">Sotavento P</option>
+          <option value="leeward_starboard">Sotavento S</option>
+          <option value="wing">Wing (Gybe)</option>
+          <option value="reach">Reach</option>
+        </select>
+        <span class="muted" id="targetHint">—</span>
+      </div>
+      <div class="metrics">
+        <div class="kv"><span class="k">Dist</span><span class="v" id="targetDist">—</span></div>
+        <div class="kv"><span class="k">BRG</span><span class="v" id="targetBrg">—</span></div>
+        <div class="kv"><span class="k">CMG</span><span class="v" id="targetCmg">—</span></div>
+        <div class="kv"><span class="k">ETA</span><span class="v" id="targetEta">—</span></div>
+      </div>
+      <div class="chart">
+        <canvas id="perfChart" class="chart__canvas"></canvas>
+        <div class="chart__legend muted">
+          <span class="legend legend--sog">SOG</span>
+          <span class="legend legend--cmg">CMG</span>
+          <span class="legend legend--hdg">HDG (mag)</span>
+          <span class="chart__meta">1s · avg ~5s</span>
         </div>
-        <div class="row">
-          <span class="muted">Objetivo</span>
-          <select id="targetSelect" class="select">
-            <option value="">—</option>
-            <option value="mark">Marca</option>
-            <option value="windward">Barlovento</option>
-            <option value="leeward_gate">Sotavento (puerta)</option>
-            <option value="leeward_port">Sotavento P</option>
-            <option value="leeward_starboard">Sotavento S</option>
-          </select>
-          <span class="muted" id="targetHint">—</span>
-        </div>
-        <div class="metrics">
-          <div class="kv"><span class="k">Dist</span><span class="v" id="targetDist">—</span></div>
-          <div class="kv"><span class="k">BRG</span><span class="v" id="targetBrg">—</span></div>
-          <div class="kv"><span class="k">CMG</span><span class="v" id="targetCmg">—</span></div>
-          <div class="kv"><span class="k">ETA</span><span class="v" id="targetEta">—</span></div>
-        </div>
-        <div class="chart">
-          <canvas id="perfChart" class="chart__canvas"></canvas>
-          <div class="chart__legend muted">
-            <span class="legend legend--sog">SOG</span>
-            <span class="legend legend--cmg">CMG</span>
-            <span class="legend legend--hdg">HDG (mag)</span>
-            <span class="chart__meta">1s · avg ~5s</span>
-          </div>
-        </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="card card--wide">
-        <div class="card__title">Salida (línea)</div>
-        <div class="row">
-          <button id="setPin" class="btn">Set PIN</button>
-          <button id="setRcb" class="btn">Set RCB</button>
-          <button id="clearStartLine" class="btn btn--ghost">Borrar línea</button>
-          <span class="muted" id="startSource">—</span>
-        </div>
-        <div class="metrics">
-          <div class="kv"><span class="k">PIN dist</span><span class="v" id="pinDist">—</span></div>
-          <div class="kv"><span class="k">PIN brg</span><span class="v" id="pinBrg">—</span></div>
-          <div class="kv"><span class="k">RCB dist</span><span class="v" id="rcbDist">—</span></div>
-          <div class="kv"><span class="k">RCB brg</span><span class="v" id="rcbBrg">—</span></div>
-          <div class="kv"><span class="k">Línea</span><span class="v" id="lineBrg">—</span></div>
-          <div class="kv"><span class="k">Largo</span><span class="v" id="lineLen">—</span></div>
-          <div class="kv"><span class="k">Dist a línea</span><span class="v" id="distLine">—</span></div>
-          <div class="kv"><span class="k">ETA línea</span><span class="v" id="etaLine">—</span></div>
-        </div>
-      </section>
+    <section class="card card--wide">
+      <div class="card__title">Salida (línea)</div>
+      <div class="row">
+        <button id="setPin" class="btn">Set PIN</button>
+        <button id="setRcb" class="btn">Set RCB</button>
+        <button id="clearStartLine" class="btn btn--ghost">Borrar línea</button>
+        <span class="muted" id="startSource">—</span>
+      </div>
+      <div class="metrics">
+        <div class="kv"><span class="k">PIN dist</span><span class="v" id="pinDist">—</span></div>
+        <div class="kv"><span class="k">PIN brg</span><span class="v" id="pinBrg">—</span></div>
+        <div class="kv"><span class="k">RCB dist</span><span class="v" id="rcbDist">—</span></div>
+        <div class="kv"><span class="k">RCB brg</span><span class="v" id="rcbBrg">—</span></div>
+        <div class="kv"><span class="k">Línea</span><span class="v" id="lineBrg">—</span></div>
+        <div class="kv"><span class="k">Largo</span><span class="v" id="lineLen">—</span></div>
+        <div class="kv"><span class="k">Dist a línea</span><span class="v" id="distLine">—</span></div>
+        <div class="kv"><span class="k">ETA línea</span><span class="v" id="etaLine">—</span></div>
+      </div>
+    </section>
 
-      <section class="card card--wide">
-        <div class="card__title">
-          Mapa
-          <div class="map-controls">
-            <button id="mapTypeStreet" class="map-btn map-btn--active">Calles</button>
-            <button id="mapTypeSat" class="map-btn">Satélite</button>
-            <button id="mapTypeNautical" class="map-btn">Náutico</button>
-            <button id="mapCenter" class="map-btn">Centrar</button>
-          </div>
+    <section class="card card--wide">
+      <div class="card__title">
+        Mapa
+        <div class="map-controls">
+          <button id="mapTypeStreet" class="map-btn map-btn--active">Calles</button>
+          <button id="mapTypeSat" class="map-btn">Satélite</button>
+          <button id="mapTypeNautical" class="map-btn">Náutico</button>
+          <button id="mapCenter" class="map-btn">Centrar</button>
         </div>
-        <div id="map" class="map"></div>
-        <div class="muted" id="lastUpdate">—</div>
-      </section>
+      </div>
+      <div id="map" class="map"></div>
+      <div class="muted" id="lastUpdate">—</div>
+    </section>
 
-      <section class="card card--wide">
-        <div class="card__title">Conexión</div>
-        <div class="row">
-          <button id="bleConnect" class="btn">Conectar BLE (móvil)</button>
-          <button id="bleConnectAll" class="btn btn--ghost">Conectar (mostrar todos)</button>
-          <button id="bleDisconnect" class="btn btn--ghost" disabled>Desconectar</button>
-          <span class="muted" id="bleInfo">—</span>
-        </div>
-        <div class="muted">
-          Opción B: el móvil/tablet se conecta directamente al Atlas 2 por BLE. Requiere Chrome/Edge en Android (Web Bluetooth).
-          En iPhone/iPad (Safari) no es compatible.
-        </div>
-      </section>
+    <section class="card card--wide">
+      <div class="card__title">Conexión</div>
+      <div class="row">
+        <button id="bleConnect" class="btn">Conectar BLE (móvil)</button>
+        <button id="bleConnectAll" class="btn btn--ghost">Conectar (mostrar todos)</button>
+        <button id="bleDisconnect" class="btn btn--ghost" disabled>Desconectar</button>
+        <span class="muted" id="bleInfo">—</span>
+      </div>
+      <div class="muted">
+        Opción B: el móvil/tablet se conecta directamente al Atlas 2 por BLE. Requiere Chrome/Edge en Android (Web
+        Bluetooth).
+        En iPhone/iPad (Safari) no es compatible.
+      </div>
+    </section>
 
-      <section class="card card--wide">
-        <div class="card__title">Escaneo</div>
-        <div class="row">
-          <button id="scan" class="btn">Scan BLE</button>
-          <span class="muted" id="scanInfo"></span>
-        </div>
-        <div id="deviceList" class="deviceList"></div>
-        <div class="muted">
-          Si no aparece, abre Vakaros Connect 5–10s para “despertar” el Atlas 2.
-        </div>
-      </section>
-    </main>
+    <section class="card card--wide">
+      <div class="card__title">Escaneo</div>
+      <div class="row">
+        <button id="scan" class="btn">Scan BLE</button>
+        <span class="muted" id="scanInfo"></span>
+      </div>
+      <div id="deviceList" class="deviceList"></div>
+      <div class="muted">
+        Si no aparece, abre Vakaros Connect 5–10s para “despertar” el Atlas 2.
+      </div>
+    </section>
+  </main>
 
-    <script src="./leaflet.js"></script>
-    <script src="./app.js"></script>
-  </body>
+  <script src="./leaflet.js"></script>
+  <script src="./app.js"></script>
+</body>
+
 </html>

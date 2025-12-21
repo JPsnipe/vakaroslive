@@ -2,14 +2,12 @@ const $ = (id) => document.getElementById(id);
 
 const els = {
   status: $("status"),
-  heading: $("heading"),
-  headingMain: $("headingMain"),
-  headingCompact: $("headingCompact"),
-  lat: $("lat"),
-  lon: $("lon"),
-  sog: $("sog"),
-  cog: $("cog"),
-  lastUpdate: $("lastUpdate"),
+  navHdg: $("navHdg"),
+  navSog: $("navSog"),
+  navCog: $("navCog"),
+  navDelta: $("navDelta"),
+  navSrc: $("navSrc"),
+  navLast: $("navLast"),
   map: $("map"),
   mapTypeStreet: $("mapTypeStreet"),
   mapTypeSat: $("mapTypeSat"),
@@ -19,12 +17,10 @@ const els = {
   clearMark: $("clearMark"),
   markDist: $("markDist"),
   markBrg: $("markBrg"),
-  f4: $("f4"),
-  f5: $("f5"),
-  f6: $("f6"),
-  c2: $("c2"),
-  reserved: $("reserved"),
-  tail: $("tail"),
+  heel: $("heel"),
+  pitch: $("pitch"),
+  field6: $("field6"),
+  compact2: $("compact2"),
   setPin: $("setPin"),
   setRcb: $("setRcb"),
   clearStartLine: $("clearStartLine"),
@@ -124,9 +120,11 @@ function fmtDeg(v) {
   return `${v.toFixed(1)}°`;
 }
 
-function fmtLatLon(v) {
+function fmtSignedDeg(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
-  return v.toFixed(6);
+  const sign = v > 0.05 ? "+" : v < -0.05 ? "−" : "";
+  const abs = Math.abs(v).toFixed(1);
+  return `${sign}${abs}°`;
 }
 
 function fmtKn(v) {
@@ -1279,19 +1277,27 @@ function applyState(state) {
         ? "status status--connected"
         : "status status--disconnected";
 
-  const hm = state.heading_deg;
+  const hdgMag = getMagHeadingDeg(state);
+  els.navHdg.textContent = fmtDeg(hdgMag);
+  els.navSog.textContent = fmtKn(state.sog_knots);
+  els.navCog.textContent = fmtDeg(state.cog_deg);
+
+  let src = "—";
   const hc = state.heading_compact_deg;
-  const hasMain = typeof hm === "number" && hm >= 0 && hm <= 360;
-  const hasCompact = typeof hc === "number" && hc >= 0 && hc <= 360;
-  els.heading.textContent = fmtDeg(hasCompact ? hc : hasMain ? hm : null);
-  els.headingMain.textContent = hasMain ? fmtDeg(hm) : "—";
-  els.headingCompact.textContent = hasCompact ? fmtDeg(hc) : "—";
-  els.lat.textContent = fmtLatLon(state.latitude);
-  els.lon.textContent = fmtLatLon(state.longitude);
-  els.sog.textContent = fmtKn(state.sog_knots);
-  els.cog.textContent = fmtDeg(state.cog_deg);
-  els.lastUpdate.textContent = state.last_event_ts_ms
-    ? `Última act.: ${new Date(state.last_event_ts_ms).toLocaleTimeString()}`
+  const hm = state.heading_deg;
+  if (typeof hc === "number" && hc >= 0 && hc <= 360) src = "HDG: compact";
+  else if (typeof hm === "number" && hm >= 0 && hm <= 360) src = "HDG: main";
+  els.navSrc.textContent = src;
+
+  if (typeof hdgMag === "number" && typeof state.cog_deg === "number") {
+    const delta = ((state.cog_deg - hdgMag + 540.0) % 360.0) - 180.0;
+    els.navDelta.textContent = fmtSignedDeg(delta);
+  } else {
+    els.navDelta.textContent = "—";
+  }
+
+  els.navLast.textContent = state.last_event_ts_ms
+    ? new Date(state.last_event_ts_ms).toLocaleTimeString()
     : "—";
 
   const marks = state.marks || {};
@@ -1318,13 +1324,14 @@ function applyState(state) {
     }
   }
 
-  els.f4.textContent = fmtNum(state.main_field_4, 3);
-  els.f5.textContent = fmtNum(state.main_field_5, 3);
-  els.f6.textContent = fmtNum(state.main_field_6, 3);
-  els.c2.textContent =
+  els.heel.textContent =
+    typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "—";
+  els.pitch.textContent =
+    typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "—";
+  els.field6.textContent =
+    typeof state.main_field_6 === "number" ? fmtNum(state.main_field_6, 3) : "—";
+  els.compact2.textContent =
     typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—";
-  els.reserved.textContent = state.main_reserved_hex || "—";
-  els.tail.textContent = state.main_tail_hex || "—";
 
   if (typeof state.latitude === "number" && typeof state.longitude === "number") {
     const ts = state.last_event_ts_ms || Date.now();
