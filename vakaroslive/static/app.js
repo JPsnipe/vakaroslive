@@ -1,5 +1,10 @@
 const $ = (id) => document.getElementById(id);
 
+function setText(el, value) {
+  if (!el) return;
+  el.textContent = value;
+}
+
 const els = {
   status: $("status"),
   navHdg: $("navHdg"),
@@ -1267,38 +1272,44 @@ function applyState(state) {
 
   const connected = !!state.connected;
   const extra = state.last_error ? ` (${shortErr(state.last_error)})` : "";
-  els.status.textContent = connected
-    ? `Conectado (${state.device_address ?? "?"})${extra}`
-    : `Desconectado${extra}`;
-  els.status.className =
-    connected && state.last_error
-      ? "status status--warning"
-      : connected
-        ? "status status--connected"
-        : "status status--disconnected";
+  setText(
+    els.status,
+    connected
+      ? `Conectado (${state.device_address ?? "?"})${extra}`
+      : `Desconectado${extra}`,
+  );
+  if (els.status) {
+    els.status.className =
+      connected && state.last_error
+        ? "status status--warning"
+        : connected
+          ? "status status--connected"
+          : "status status--disconnected";
+  }
 
   const hdgMag = getMagHeadingDeg(state);
-  els.navHdg.textContent = fmtDeg(hdgMag);
-  els.navSog.textContent = fmtKn(state.sog_knots);
-  els.navCog.textContent = fmtDeg(state.cog_deg);
+  setText(els.navHdg, fmtDeg(hdgMag));
+  setText(els.navSog, fmtKn(state.sog_knots));
+  setText(els.navCog, fmtDeg(state.cog_deg));
 
   let src = "—";
   const hc = state.heading_compact_deg;
   const hm = state.heading_deg;
   if (typeof hc === "number" && hc >= 0 && hc <= 360) src = "HDG: compact";
   else if (typeof hm === "number" && hm >= 0 && hm <= 360) src = "HDG: main";
-  els.navSrc.textContent = src;
+  setText(els.navSrc, src);
 
   if (typeof hdgMag === "number" && typeof state.cog_deg === "number") {
     const delta = ((state.cog_deg - hdgMag + 540.0) % 360.0) - 180.0;
-    els.navDelta.textContent = fmtSignedDeg(delta);
+    setText(els.navDelta, fmtSignedDeg(delta));
   } else {
-    els.navDelta.textContent = "—";
+    setText(els.navDelta, "—");
   }
 
-  els.navLast.textContent = state.last_event_ts_ms
-    ? new Date(state.last_event_ts_ms).toLocaleTimeString()
-    : "—";
+  setText(
+    els.navLast,
+    state.last_event_ts_ms ? new Date(state.last_event_ts_ms).toLocaleTimeString() : "—",
+  );
 
   const marks = state.marks || {};
   if (!useLocalMarks) {
@@ -1324,14 +1335,10 @@ function applyState(state) {
     }
   }
 
-  els.heel.textContent =
-    typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "—";
-  els.pitch.textContent =
-    typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "—";
-  els.field6.textContent =
-    typeof state.main_field_6 === "number" ? fmtNum(state.main_field_6, 3) : "—";
-  els.compact2.textContent =
-    typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—";
+  setText(els.heel, typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "—");
+  setText(els.pitch, typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "—");
+  setText(els.field6, typeof state.main_field_6 === "number" ? fmtNum(state.main_field_6, 3) : "—");
+  setText(els.compact2, typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—");
 
   if (typeof state.latitude === "number" && typeof state.longitude === "number") {
     const ts = state.last_event_ts_ms || Date.now();
