@@ -25,6 +25,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--certfile", default=None, help="Ruta a certificado PEM (chain).")
     parser.add_argument("--keyfile", default=None, help="Ruta a clave privada PEM.")
     parser.add_argument(
+        "--no-ble",
+        action="store_true",
+        help="No conecta al Atlas por BLE (útil para que otro móvil/app se conecte).",
+    )
+    parser.add_argument(
         "--device",
         default=None,
         help="Dirección BLE (recomendado) o substring del nombre para auto-selección.",
@@ -124,7 +129,7 @@ async def main() -> None:
     ]
     if args.mock:
         tasks.append(asyncio.create_task(_mock_telemetry(event_queue), name="mock"))
-    else:
+    elif not args.no_ble:
         tasks.append(asyncio.create_task(ble.run(), name="ble"))
 
     try:

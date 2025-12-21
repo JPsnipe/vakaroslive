@@ -42,6 +42,7 @@ python -m vakaroslive --host 0.0.0.0 --port 8000
 
 - El protocolo BLE está basado en ingeniería inversa; algunos campos aún no están confirmados.
 - Si el Atlas 2 está conectado a Vakaros Connect, es posible que **no envíe telemetría** a esta app (prueba a desconectar/cerrar Vakaros Connect).
+- BLE suele ser “exclusivo”: si el Atlas está conectado al PC o a otra app (nRF Connect/Vakaros Connect), el móvil puede no verlo o no poder emparejar.
 
 ## Android (sin PC para BLE) – Opción B
 
