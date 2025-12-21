@@ -40,7 +40,10 @@ const els = {
   setWindward: $("setWindward"),
   setLeewardPort: $("setLeewardPort"),
   setLeewardStarboard: $("setLeewardStarboard"),
+  setWing: $("setWing"),
+  setReach: $("setReach"),
   clearRaceMarks: $("clearRaceMarks"),
+  courseType: $("courseType"),
   targetSelect: $("targetSelect"),
   targetHint: $("targetHint"),
   targetDist: $("targetDist"),
@@ -64,6 +67,9 @@ let startLine = { pin: null, rcb: null, source: null };
 let windward = null; // {lat, lon}
 let leewardPort = null; // {lat, lon}
 let leewardStarboard = null; // {lat, lon}
+let wingMark = null; // {lat, lon}
+let reachMark = null; // {lat, lon}
+let currentCourseType = "W/L";
 let targetId = null; // string|null
 let trackPoints = []; // [{lat, lon}]
 let lastTrackTsMs = null;
@@ -71,6 +77,7 @@ let lastTrackTsMs = null;
 // Rendimiento (1 Hz)
 const CHART_WINDOW_S = 120;
 const CHART_ALPHA = 0.35; // EMA (~5s)
+const KNOTS_PER_MPS = 1.9438444924406048;
 let perfSamples = []; // [{sec, sog, cmg, hdg}]
 let lastPerfSec = null;
 let emaSog = null;
@@ -80,6 +87,7 @@ let emaCos = null;
 let lastHdgEma = null;
 let lastHdgUnwrapped = null;
 let chartDrawPending = false;
+let fixHistory = []; // [{tsMs, lat, lon}]
 
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
@@ -105,7 +113,11 @@ let windwardMarker = null;
 let leewardPortMarker = null;
 let leewardStarboardMarker = null;
 let leewardGatePolyline = null;
+let coursePolyline = null; // Line connecting marks based on course type
+let laylinesPolyline = null;
 let targetLinePolyline = null;
+let wingMarker = null;
+let reachMarker = null;
 
 function fmtDeg(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -167,6 +179,26 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
     Math.cos(phi1) * Math.sin(phi2) -
     Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlambda);
   return (toDeg(Math.atan2(y, x)) + 360.0) % 360.0;
+}
+
+function projectPoint(lat, lon, bearing, distM) {
+  const R = 6371000.0;
+  const toRad = (x) => (x * Math.PI) / 180.0;
+  const toDeg = (x) => (x * 180.0) / Math.PI;
+  const phi1 = toRad(lat);
+  const lambda1 = toRad(lon);
+  const brg = toRad(bearing);
+  const dByR = distM / R;
+
+  const phi2 = Math.asin(
+    Math.sin(phi1) * Math.cos(dByR) +
+    Math.cos(phi1) * Math.sin(dByR) * Math.cos(brg)
+  );
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(brg) * Math.sin(dByR) * Math.cos(phi1),
+    Math.cos(dByR) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return { lat: toDeg(phi2), lon: toDeg(lambda2) };
 }
 
 function distToLineM(p, a, b) {
@@ -341,6 +373,8 @@ function targetPointForId(id) {
   if (id === "windward") return windward;
   if (id === "leeward_port") return leewardPort;
   if (id === "leeward_starboard") return leewardStarboard;
+  if (id === "wing") return wingMark;
+  if (id === "reach") return reachMark;
   if (id === "leeward_gate") {
     if (!leewardPort || !leewardStarboard) return null;
     return midpointPoint(leewardPort, leewardStarboard);
@@ -403,6 +437,14 @@ function applyLocalMarksToUi() {
   leewardStarboard = marks.leeward_starboard
     ? { lat: marks.leeward_starboard.lat, lon: marks.leeward_starboard.lon }
     : null;
+  wingMark = marks.wing_mark ? { lat: marks.wing_mark.lat, lon: marks.wing_mark.lon } : null;
+  reachMark = marks.reach_mark ? { lat: marks.reach_mark.lat, lon: marks.reach_mark.lon } : null;
+  currentCourseType = marks.course_type || "W/L";
+
+  if (els.courseType && els.courseType.value !== currentCourseType) {
+    els.courseType.value = currentCourseType;
+  }
+
   targetId = marks.target ?? null;
   startLine = {
     pin: marks.start_pin ? { lat: marks.start_pin.lat, lon: marks.start_pin.lon } : null,
@@ -481,6 +523,7 @@ function resetPerfSeries() {
   emaCos = null;
   lastHdgEma = null;
   lastHdgUnwrapped = null;
+  fixHistory = [];
   scheduleChartDraw();
 }
 
@@ -498,6 +541,29 @@ function computeCmgKn(state, targetPoint) {
   const deltaDeg = ((cog - brg + 540.0) % 360.0) - 180.0;
   const cmgKn = sog * Math.cos((deltaDeg * Math.PI) / 180.0);
   return Number.isFinite(cmgKn) ? cmgKn : null;
+}
+
+function deriveSogCogInPlace(state) {
+  if (typeof state?.latitude !== "number" || typeof state?.longitude !== "number") return;
+  const tsMs =
+    typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
+
+  fixHistory.push({ tsMs, lat: state.latitude, lon: state.longitude });
+  const cutoff = tsMs - 4000;
+  while (fixHistory.length > 2 && fixHistory[0].tsMs < cutoff) fixHistory.shift();
+
+  if (fixHistory.length < 2) return;
+  const first = fixHistory[0];
+  const last = fixHistory[fixHistory.length - 1];
+  const dt = Math.max(0.001, (last.tsMs - first.tsMs) / 1000.0);
+  const distM = haversineM(first.lat, first.lon, last.lat, last.lon);
+  const sogKn = (distM / dt) * KNOTS_PER_MPS;
+  if (!Number.isFinite(sogKn) || sogKn <= 0 || sogKn > 40) return;
+
+  // No machacar valores que ya vengan del backend.
+  if (typeof state.sog_knots !== "number") state.sog_knots = sogKn;
+  if (typeof state.cog_deg !== "number")
+    state.cog_deg = bearingDeg(first.lat, first.lon, last.lat, last.lon);
 }
 
 function pushPerfSample(state) {
@@ -839,6 +905,18 @@ function drawTrack() {
       cmd: "set_leeward_starboard",
     },
   );
+  wingMarker = upsertDraggableMarker(wingMarker, wingMark, {
+    color: "#ff88ff",
+    text: "Wi",
+    popup: "Wing / Gybe",
+    cmd: "set_wing",
+  });
+  reachMarker = upsertDraggableMarker(reachMarker, reachMark, {
+    color: "#ff88ff",
+    text: "Re",
+    popup: "Reach",
+    cmd: "set_reach",
+  });
 
   // Línea de salida (PIN/RCB)
   pinMarker = upsertDraggableMarker(pinMarker, startLine?.pin, {
@@ -915,6 +993,105 @@ function drawTrack() {
   } else if (targetLinePolyline) {
     map.removeLayer(targetLinePolyline);
     targetLinePolyline = null;
+  }
+
+  // Draw Course Geometry (Triangle/Trapezoid/WL)
+  const coursePoints = [];
+  if (currentCourseType === "Triangle") {
+    // W -> Wing -> Leeward -> W
+    if (windward) coursePoints.push([windward.lat, windward.lon]);
+    if (wingMark) coursePoints.push([wingMark.lat, wingMark.lon]);
+    if (leewardPort || leewardStarboard) {
+      const l = leewardPort || leewardStarboard;
+      coursePoints.push([l.lat, l.lon]);
+    }
+    if (windward) coursePoints.push([windward.lat, windward.lon]); // Close loop
+  } else if (currentCourseType === "Trapezoid") {
+    // W -> Reach -> Leeward -> Reach -> W (simplified)
+    if (windward) coursePoints.push([windward.lat, windward.lon]);
+    if (reachMark) coursePoints.push([reachMark.lat, reachMark.lon]);
+    if (leewardPort || leewardStarboard) {
+      const l = leewardPort || leewardStarboard;
+      coursePoints.push([l.lat, l.lon]);
+    }
+    // TODO: support 2nd reach mark if needed
+  } else {
+    // W/L: just W <-> Leeward
+    if (windward && (leewardPort || leewardStarboard)) {
+      coursePoints.push([windward.lat, windward.lon]);
+      const l = leewardPort || leewardStarboard; // or gate center
+      coursePoints.push([l.lat, l.lon]);
+    }
+  }
+
+  if (coursePoints.length > 1) {
+    if (!coursePolyline) {
+      coursePolyline = L.polyline(coursePoints, {
+        color: "#ccc",
+        weight: 1,
+        dashArray: "5,5",
+        opacity: 0.5,
+      }).addTo(map);
+    } else {
+      coursePolyline.setLatLngs(coursePoints);
+    }
+  } else if (coursePolyline) {
+    map.removeLayer(coursePolyline);
+    coursePolyline = null;
+  }
+
+  drawLaylines();
+}
+
+function drawLaylines() {
+  const laylineDist = 3000; // 3km
+  const lines = [];
+
+  // Windward Laylines (assuming axis is Leeward/Start -> Windward)
+  if (windward && (leewardPort || leewardStarboard || startLine?.pin)) {
+    // Determine bottom mark (reference for axis)
+    let bottom = null;
+    if (leewardPort && leewardStarboard) {
+      bottom = midpointPoint(leewardPort, leewardStarboard);
+    } else if (leewardPort) {
+      bottom = leewardPort;
+    } else if (leewardStarboard) {
+      bottom = leewardStarboard;
+    } else if (startLine?.pin && startLine?.rcb) {
+      bottom = midpointPoint(startLine.pin, startLine.rcb);
+    }
+
+    if (bottom) {
+      const axis = bearingDeg(bottom.lat, bottom.lon, windward.lat, windward.lon);
+
+      // Starboard Tack Layline (Wind from Axis): approach from right side (looking upwind)
+      // Bearing TO mark = Axis + 135
+      const p1 = projectPoint(windward.lat, windward.lon, axis + 135, laylineDist);
+      lines.push([[windward.lat, windward.lon], [p1.lat, p1.lon]]);
+
+      // Port Tack Layline
+      // Bearing TO mark = Axis + 225 (or axis - 135)
+      const p2 = projectPoint(windward.lat, windward.lon, axis + 225, laylineDist);
+      lines.push([[windward.lat, windward.lon], [p2.lat, p2.lon]]);
+    }
+  }
+
+  // TODO: Leeward laylines (gybing angles) if needed?
+
+  if (lines.length > 0) {
+    if (!laylinesPolyline) {
+      laylinesPolyline = L.polyline(lines, {
+        color: "#ff5555",
+        weight: 1,
+        dashArray: "2,4",
+        opacity: 0.6,
+      }).addTo(map);
+    } else {
+      laylinesPolyline.setLatLngs(lines);
+    }
+  } else if (laylinesPolyline) {
+    map.removeLayer(laylinesPolyline);
+    laylinesPolyline = null;
   }
 }
 
@@ -1087,6 +1264,9 @@ function updateStartLineStats() {
 function applyState(state) {
   lastState = state;
 
+  // En modo BLE directo no recibimos SOG/COG: lo derivamos de lat/lon recientes.
+  deriveSogCogInPlace(state);
+
   const connected = !!state.connected;
   const extra = state.last_error ? ` (${shortErr(state.last_error)})` : "";
   els.status.textContent = connected
@@ -1155,7 +1335,7 @@ function applyState(state) {
     if (last && typeof lastTs === "number") {
       const dt = Math.max(0.001, (ts - lastTs) / 1000.0);
       const distM = haversineM(last.lat, last.lon, next.lat, next.lon);
-      const speedKn = (distM / dt) * 1.9438444924406048;
+      const speedKn = (distM / dt) * KNOTS_PER_MPS;
       if (speedKn < 35) {
         trackPoints.push(next);
         lastTrackTsMs = ts;
@@ -1555,6 +1735,18 @@ els.setLeewardPort?.addEventListener("click", () => {
   sendCmd("set_leeward_port");
 });
 
+els.setWing?.addEventListener("click", () => {
+  sendCmd("set_wing");
+});
+
+els.setReach?.addEventListener("click", () => {
+  sendCmd("set_reach");
+});
+
+els.courseType?.addEventListener("change", () => {
+  sendCmd("set_course_type", { course_type: els.courseType.value });
+});
+
 els.setLeewardStarboard?.addEventListener("click", () => {
   sendCmd("set_leeward_starboard");
 });
@@ -1619,7 +1811,7 @@ els.bleDisconnect?.addEventListener("click", () => {
 });
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sw.js").catch(() => { });
 }
 
 initMap();
