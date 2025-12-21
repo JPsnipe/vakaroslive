@@ -1261,10 +1261,32 @@ class AtlasWebBleClient {
     if (!supportsWebBluetooth()) throw new Error("Web Bluetooth no disponible");
     setBleUi(false, "Selecciona el Atlas 2…");
 
-    this.device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [VAKAROS_SERVICE_UUID] }],
-      optionalServices: [VAKAROS_SERVICE_UUID],
-    });
+    // Algunos firmwares no anuncian el servicio propietario hasta estar conectados.
+    // En ese caso, filtrar por servicio deja el selector vacío en Android.
+    // Preferimos filtrar por nombre y ofrecemos fallback a "mostrar todos".
+    try {
+      this.device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: "Atlas" }, { services: [VAKAROS_SERVICE_UUID] }],
+        optionalServices: [VAKAROS_SERVICE_UUID],
+      });
+    } catch (e) {
+      const name = e?.name || "";
+      if (name === "NotFoundError") {
+        const ok = confirm(
+          "No aparece ningún dispositivo.\n\n¿Quieres mostrar TODOS los BLE cercanos? (puede haber muchos)\n\nTip: asegúrate de que Ubicación está activada y Vakaros Connect está cerrado.",
+        );
+        if (ok) {
+          this.device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [VAKAROS_SERVICE_UUID],
+          });
+        } else {
+          throw e;
+        }
+      } else {
+        throw e;
+      }
+    }
 
     this.device.addEventListener("gattserverdisconnected", this.onDisconnected);
     this.server = await this.device.gatt.connect();
