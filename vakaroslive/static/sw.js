@@ -1,6 +1,5 @@
-const CACHE = "vakaroslive-v7";
-const ASSETS = ["/", "/app.js", "/styles.css", "/leaflet.css", "/leaflet.js", "/manifest.webmanifest", "/icon.svg"];
-const NETWORK_FIRST = new Set(["/", "/app.js", "/styles.css", "/leaflet.css", "/leaflet.js"]);
+const CACHE = "vakaroslive-v8";
+const ASSETS = ["./", "./app.js", "./styles.css", "./leaflet.css", "./leaflet.js", "./manifest.webmanifest", "./icon.svg", "./.nojekyll"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -49,7 +48,16 @@ self.addEventListener("fetch", (event) => {
     return res;
   }
 
-  if (request.mode === "navigate" || NETWORK_FIRST.has(url.pathname)) {
+  const path = url.pathname;
+  const useNetworkFirst =
+    request.mode === "navigate" ||
+    path.endsWith("/app.js") ||
+    path.endsWith("/styles.css") ||
+    path.endsWith("/leaflet.css") ||
+    path.endsWith("/leaflet.js") ||
+    path.endsWith("/manifest.webmanifest");
+
+  if (useNetworkFirst) {
     event.respondWith(networkFirst());
     return;
   }

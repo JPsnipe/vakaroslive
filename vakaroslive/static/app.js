@@ -88,7 +88,8 @@ const LOCAL_MARKS_KEY = "vkl_marks_v1";
 let bleClient = null;
 let useLocalMarks = false;
 let localMarks = null;
-let wsWanted = true;
+const IS_GH_PAGES = typeof location !== "undefined" && location.hostname.endsWith("github.io");
+let wsWanted = !IS_GH_PAGES;
 
 // Leaflet map
 let map = null;
@@ -1458,7 +1459,7 @@ async function scanDevices() {
   els.deviceList.innerHTML = "";
 
   try {
-    const res = await fetch("/api/scan?timeout=6");
+    const res = await fetch("./api/scan?timeout=6");
     const json = await res.json();
     if (json.error) {
       els.scanInfo.textContent = shortErr(json.error);
@@ -1591,5 +1592,5 @@ applyLocalMarksToUi();
 applyState(lastState);
 
 // Si hay backend, se impondrá al conectar por WS.
-connectWs();
+if (wsWanted) connectWs();
 window.addEventListener("resize", () => scheduleChartDraw());
