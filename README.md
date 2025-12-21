@@ -60,6 +60,10 @@ Para uso real, lo más cómodo es:
 2) Abrirla en el móvil y **Añadir a pantalla de inicio** (PWA).
 3) Luego puede abrirse incluso sin Internet (cache del service worker) y seguirá pudiendo conectar por BLE.
 
+GitHub Pages (este repo):
+- URL esperada: `https://jpsnipe.github.io/vakaroslive/`
+- Si da 404, revisa `Settings → Pages` (Source: GitHub Actions) y `Actions` para el deploy.
+
 ### HTTPS local (para pruebas)
 
 Si quieres probarlo sirviendo desde tu PC en casa, el servidor soporta HTTPS:
