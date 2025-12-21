@@ -104,6 +104,7 @@ let wsWanted = !IS_GH_PAGES;
 // Leaflet map
 let map = null;
 let currentLayer = null;
+let nauticalBaseLayer = null;
 let trackPolyline = null;
 let positionMarker = null;
 let markMarker = null;
@@ -257,6 +258,10 @@ function setMapLayer(type) {
   if (currentLayer) {
     map.removeLayer(currentLayer);
   }
+  if (nauticalBaseLayer) {
+    map.removeLayer(nauticalBaseLayer);
+    nauticalBaseLayer = null;
+  }
 
   // Actualizar botones activos
   document.querySelectorAll(".map-btn").forEach(btn => {
@@ -286,10 +291,11 @@ function setMapLayer(type) {
       className: 'map-tiles'
     });
     // Añadir base clara debajo
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+    nauticalBaseLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
       attribution: '© OpenStreetMap, © CARTO',
       maxZoom: 19
-    }).addTo(map);
+    });
+    nauticalBaseLayer.addTo(map);
     els.mapTypeNautical.classList.add("map-btn--active");
   }
 
