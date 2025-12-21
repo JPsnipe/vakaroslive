@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import json
 import time
 from dataclasses import dataclass, field
@@ -104,6 +105,12 @@ class AtlasState:
     _fix_history: list[tuple[int, float, float]] = field(
         default_factory=list, repr=False
     )  # (ts_ms, lat, lon)
+    _compact_sog_scale: int | None = field(default=None, repr=False)
+    _compact_sog_scale_hits: dict[int, int] = field(
+        default_factory=lambda: {100: 0, 10: 0, 1: 0}, repr=False
+    )
+    _last_compact_sog_ts_ms: int | None = field(default=None, repr=False)
+    _last_derived_sog_knots: float | None = field(default=None, repr=False)
     marks: RaceMarks = field(default_factory=RaceMarks)
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,6 +136,58 @@ class AtlasState:
             "marks": self.marks.to_dict(),
         }
 
+    def _decode_sog_knots_from_compact_field2(self, field_2: Any) -> float | None:
+        if not isinstance(field_2, int):
+            return None
+        raw = int(field_2)
+        if raw < 0 or raw > 65535:
+            return None
+
+        if self._compact_sog_scale is not None:
+            v = raw / float(self._compact_sog_scale)
+            return v if 0.0 <= v <= 60.0 else None
+
+        candidates: list[tuple[int, float]] = []
+        for scale in (100, 10, 1):
+            v = raw / float(scale)
+            if 0.0 <= v <= 60.0:
+                candidates.append((scale, v))
+        if not candidates:
+            return None
+
+        ref = self._last_derived_sog_knots
+        has_ref = isinstance(ref, (int, float)) and math.isfinite(ref) and ref > 0.05
+        if has_ref:
+            candidates.sort(key=lambda sv: abs(sv[1] - float(ref)))
+            scale, v = candidates[0]
+            tol = max(2.5, float(ref) * 0.8)
+            if abs(v - float(ref)) > tol:
+                for s in (100, 10, 1):
+                    self._compact_sog_scale_hits[s] = max(
+                        0, int(self._compact_sog_scale_hits.get(s, 0)) - 1
+                    )
+                return None
+
+            self._compact_sog_scale_hits[scale] = int(
+                self._compact_sog_scale_hits.get(scale, 0)
+            ) + 1
+            for s in (100, 10, 1):
+                if s != scale:
+                    self._compact_sog_scale_hits[s] = max(
+                        0, int(self._compact_sog_scale_hits.get(s, 0)) - 1
+                    )
+            if int(self._compact_sog_scale_hits.get(scale, 0)) >= 3:
+                self._compact_sog_scale = scale
+            return v
+
+        # Sin referencia: usa la escala más probable (más resolución) en rango.
+        candidates.sort(key=lambda sv: sv[0], reverse=True)
+        scale, v = candidates[0]
+        self._compact_sog_scale_hits[scale] = int(self._compact_sog_scale_hits.get(scale, 0)) + 1
+        if int(self._compact_sog_scale_hits.get(scale, 0)) >= 5:
+            self._compact_sog_scale = scale
+        return v
+
     def to_persisted_json(self) -> str:
         return json.dumps({"marks": self.marks.to_dict()}, ensure_ascii=False, indent=2)
 
@@ -145,6 +204,10 @@ class AtlasState:
                 self._fix_history.clear()
                 self.sog_knots = None
                 self.cog_deg = None
+                self._compact_sog_scale = None
+                self._compact_sog_scale_hits = {100: 0, 10: 0, 1: 0}
+                self._last_compact_sog_ts_ms = None
+                self._last_derived_sog_knots = None
             return
 
         if etype == "telemetry_compact":
@@ -154,6 +217,10 @@ class AtlasState:
             field_2 = event.get("field_2")
             if isinstance(field_2, int):
                 self.compact_field_2 = field_2
+                decoded_sog = self._decode_sog_knots_from_compact_field2(field_2)
+                if decoded_sog is not None:
+                    self.sog_knots = decoded_sog
+                    self._last_compact_sog_ts_ms = int(self.last_event_ts_ms)
             raw_len = event.get("raw_len")
             if isinstance(raw_len, int):
                 self.compact_raw_len = raw_len
@@ -188,7 +255,13 @@ class AtlasState:
                 dist_m = haversine_m(first_lat, first_lon, last_lat, last_lon)
                 sog_kn = (dist_m / dt_s) * MPS_TO_KNOTS
                 if sog_kn <= 40.0:
-                    self.sog_knots = sog_kn
+                    self._last_derived_sog_knots = sog_kn
+                    if (
+                        self._last_compact_sog_ts_ms is None
+                        or int(self.last_event_ts_ms) - int(self._last_compact_sog_ts_ms) > 2500
+                        or self.sog_knots is None
+                    ):
+                        self.sog_knots = sog_kn
                     self.cog_deg = bearing_deg(first_lat, first_lon, last_lat, last_lon)
 
         if isinstance(heading, (int, float)):

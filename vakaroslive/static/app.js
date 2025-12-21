@@ -91,6 +91,10 @@ let lastHdgEma = null;
 let lastHdgUnwrapped = null;
 let chartDrawPending = false;
 let fixHistory = []; // [{tsMs, lat, lon}]
+let lastDerivedSogKn = null;
+let compactSogScale = null; // 100|10|1
+let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
+let lastAtlasSogTsMs = 0;
 
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
@@ -566,6 +570,10 @@ function resetPerfSeries() {
   lastHdgEma = null;
   lastHdgUnwrapped = null;
   fixHistory = [];
+  lastDerivedSogKn = null;
+  compactSogScale = null;
+  compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
+  lastAtlasSogTsMs = 0;
   scheduleChartDraw();
 }
 
@@ -585,12 +593,64 @@ function computeCmgKn(state, targetPoint) {
   return Number.isFinite(cmgKn) ? cmgKn : null;
 }
 
+function decodeSogKnFromCompactField2(field2, refSogKn) {
+  if (typeof field2 !== "number" || !Number.isFinite(field2)) return null;
+  const raw = Math.round(field2);
+  if (raw < 0 || raw > 65535) return null;
+
+  if (compactSogScale) {
+    const v = raw / compactSogScale;
+    return v >= 0 && v <= 60 ? v : null;
+  }
+
+  const candidates = [];
+  for (const scale of [100, 10, 1]) {
+    const v = raw / scale;
+    if (v >= 0 && v <= 60) candidates.push({ scale, v });
+  }
+  if (!candidates.length) return null;
+
+  const hasRef = typeof refSogKn === "number" && Number.isFinite(refSogKn) && refSogKn > 0.05;
+  if (hasRef) {
+    candidates.sort((a, b) => Math.abs(a.v - refSogKn) - Math.abs(b.v - refSogKn));
+    const best = candidates[0];
+
+    const tol = Math.max(2.5, refSogKn * 0.8);
+    if (Math.abs(best.v - refSogKn) > tol) {
+      compactSogScaleHits[100] = Math.max(0, (compactSogScaleHits[100] || 0) - 1);
+      compactSogScaleHits[10] = Math.max(0, (compactSogScaleHits[10] || 0) - 1);
+      compactSogScaleHits[1] = Math.max(0, (compactSogScaleHits[1] || 0) - 1);
+      return null;
+    }
+
+    compactSogScaleHits[best.scale] = (compactSogScaleHits[best.scale] || 0) + 1;
+    for (const s of [100, 10, 1]) {
+      if (s !== best.scale) compactSogScaleHits[s] = Math.max(0, (compactSogScaleHits[s] || 0) - 1);
+    }
+    if ((compactSogScaleHits[best.scale] || 0) >= 3) {
+      compactSogScale = best.scale;
+    }
+
+    return best.v;
+  }
+
+  // Sin referencia: intenta la escala más probable (más resolución) que dé un rango plausible.
+  candidates.sort((a, b) => b.scale - a.scale);
+  const best = candidates[0];
+  compactSogScaleHits[best.scale] = (compactSogScaleHits[best.scale] || 0) + 1;
+  if ((compactSogScaleHits[best.scale] || 0) >= 5) {
+    compactSogScale = best.scale;
+  }
+  return best.v;
+}
+
 function deriveSogCogInPlace(state) {
   if (typeof state?.latitude !== "number" || typeof state?.longitude !== "number") return;
   const tsMs =
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
 
   const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
+  const atlasSogFresh = Number.isFinite(lastAtlasSogTsMs) && tsMs - lastAtlasSogTsMs < 2200;
 
   // Si no hay nueva posición (solo llegan frames de heading), no dejes SOG/COG congelados.
   const last = fixHistory.length ? fixHistory[fixHistory.length - 1] : null;
@@ -602,7 +662,7 @@ function deriveSogCogInPlace(state) {
   ) {
     const ageMs = tsMs - last.tsMs;
     if (Number.isFinite(ageMs) && ageMs > 2500) {
-      state.sog_knots = null;
+      if (!atlasSogFresh) state.sog_knots = null;
       state.cog_deg = null;
     }
     return;
@@ -619,9 +679,15 @@ function deriveSogCogInPlace(state) {
   const distM = haversineM(first.lat, first.lon, lastFix.lat, lastFix.lon);
   const sogKn = (distM / dt) * KNOTS_PER_MPS;
   if (!Number.isFinite(sogKn) || sogKn <= 0 || sogKn > 40) return;
+  lastDerivedSogKn = sogKn;
 
-  // En BLE directo (sin backend) queremos refrescar continuamente; con backend no machacamos su cálculo.
-  if (!backendActive || typeof state.sog_knots !== "number") state.sog_knots = sogKn;
+  // Si Atlas está enviando SOG (vía compact), no lo sobrescribas con el derivado del GPS del móvil.
+  if (!backendActive && !atlasSogFresh) {
+    state.sog_knots = sogKn;
+  } else if (backendActive && typeof state.sog_knots !== "number") {
+    state.sog_knots = sogKn;
+  }
+
   if (!backendActive || typeof state.cog_deg !== "number") {
     state.cog_deg = bearingDeg(first.lat, first.lon, lastFix.lat, lastFix.lon);
   }
@@ -1711,11 +1777,16 @@ class AtlasWebBleClient {
     const parsed = parseCompactPacket(dv);
     if (!parsed) return;
     this.lastCompactTs = Date.now();
+    const decodedSog = decodeSogKnFromCompactField2(parsed.field_2 ?? null, lastDerivedSogKn);
+    if (typeof decodedSog === "number") {
+      lastAtlasSogTsMs = parsed.ts_ms;
+    }
     applyBlePartialState({
       connected: true,
       device_address: this.device?.name || "Atlas",
       last_event_ts_ms: parsed.ts_ms,
       heading_compact_deg: parsed.heading_deg ?? null,
+      sog_knots: typeof decodedSog === "number" ? decodedSog : (lastState?.sog_knots ?? null),
       compact_field_2: parsed.field_2 ?? null,
       compact_raw_len: parsed.raw_len ?? null,
     });
