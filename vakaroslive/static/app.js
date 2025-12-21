@@ -1266,65 +1266,81 @@ class AtlasWebBleClient {
     // En ese caso, filtrar por servicio deja el selector vacío en Android.
     // Preferimos filtrar por nombre y ofrecemos fallback a "mostrar todos".
     const acceptAll = !!options.acceptAllDevices;
-    if (acceptAll) {
-      this.device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [VAKAROS_SERVICE_UUID],
-      });
-    } else {
-      try {
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (acceptAll) {
         this.device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: "Atlas" }, { services: [VAKAROS_SERVICE_UUID] }],
+          acceptAllDevices: true,
           optionalServices: [VAKAROS_SERVICE_UUID],
         });
-      } catch (e) {
-        const name = e?.name || "";
-        if (name === "NotFoundError") {
-          const ok = confirm(
-            "Si el selector se queda buscando sin mostrar dispositivos, pulsa Atrás para cancelar.\n\n¿Quieres mostrar TODOS los BLE cercanos? (puede haber muchos)\n\nTip: Ubicación activada + Vakaros Connect cerrado.",
-          );
-          if (ok) {
-            this.device = await navigator.bluetooth.requestDevice({
-              acceptAllDevices: true,
-              optionalServices: [VAKAROS_SERVICE_UUID],
-            });
-          } else {
-            throw e;
+      } else {
+        try {
+          this.device = await navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: "Atlas" }, { services: [VAKAROS_SERVICE_UUID] }],
+            optionalServices: [VAKAROS_SERVICE_UUID],
+          });
+        } catch (e) {
+          const name = e?.name || "";
+          if (name === "NotFoundError") {
+            const ok = confirm(
+              "Si el selector se queda buscando sin mostrar dispositivos, pulsa Atrás para cancelar.\n\n¿Quieres mostrar TODOS los BLE cercanos? (puede haber muchos)\n\nTip: Ubicación activada + Vakaros Connect cerrado.",
+            );
+            if (ok) {
+              return this.connect({ acceptAllDevices: true });
+            }
           }
-        } else {
           throw e;
         }
       }
-    }
 
-    this.device.addEventListener("gattserverdisconnected", this.onDisconnected);
-    this.server = await this.device.gatt.connect();
-    const service = await this.server.getPrimaryService(VAKAROS_SERVICE_UUID);
-    this.mainChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_MAIN);
-    this.compactChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_COMPACT);
+      this.device.addEventListener("gattserverdisconnected", this.onDisconnected);
+      this.server = await this.device.gatt.connect();
 
-    const name = this.device.name || "Atlas";
-    wsWanted = false;
-    if (wsConn && wsConn.readyState <= WebSocket.OPEN) {
+      let service;
       try {
-        wsConn.close();
-      } catch {
-        // ignore
+        service = await this.server.getPrimaryService(VAKAROS_SERVICE_UUID);
+      } catch (e) {
+        // Si el usuario eligió otro BLE, no tendrá el servicio Vakaros.
+        // Lo indicamos claramente y permitimos reintentar (para listas con nombres raros).
+        this.disconnect();
+        const ok = confirm(
+          "Ese dispositivo no parece ser el Atlas 2 (no expone el servicio Vakaros).\n\n¿Quieres probar con otro?",
+        );
+        if (ok) {
+          continue;
+        }
+        throw e;
       }
+
+      this.mainChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_MAIN);
+      this.compactChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_COMPACT);
+
+      const name = this.device.name || "Atlas";
+      wsWanted = false;
+      if (wsConn && wsConn.readyState <= WebSocket.OPEN) {
+        try {
+          wsConn.close();
+        } catch {
+          // ignore
+        }
+      }
+      useLocalMarks = true;
+      localMarks = ensureMarksShape(loadLocalMarks() || {});
+      applyLocalMarksToUi();
+
+      setBleUi(true, `Conectado: ${name}`);
+      applyBlePartialState({
+        connected: true,
+        device_address: name,
+        last_error: null,
+      });
+
+      await this.startNotifications();
+      this.startPolling();
+      return;
     }
-    useLocalMarks = true;
-    localMarks = ensureMarksShape(loadLocalMarks() || {});
-    applyLocalMarksToUi();
 
-    setBleUi(true, `Conectado: ${name}`);
-    applyBlePartialState({
-      connected: true,
-      device_address: name,
-      last_error: null,
-    });
-
-    await this.startNotifications();
-    this.startPolling();
+    throw new Error("No se pudo seleccionar el Atlas 2.");
   }
 
   onDisconnected() {
