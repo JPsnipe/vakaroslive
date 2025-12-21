@@ -551,24 +551,40 @@ function deriveSogCogInPlace(state) {
   const tsMs =
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
 
+  const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
+
+  // Si no hay nueva posición (solo llegan frames de heading), no dejes SOG/COG congelados.
+  const last = fixHistory.length ? fixHistory[fixHistory.length - 1] : null;
+  if (
+    last &&
+    last.lat === state.latitude &&
+    last.lon === state.longitude &&
+    !backendActive
+  ) {
+    const ageMs = tsMs - last.tsMs;
+    if (Number.isFinite(ageMs) && ageMs > 2500) {
+      state.sog_knots = null;
+      state.cog_deg = null;
+    }
+    return;
+  }
+
   fixHistory.push({ tsMs, lat: state.latitude, lon: state.longitude });
   const cutoff = tsMs - 4000;
   while (fixHistory.length > 2 && fixHistory[0].tsMs < cutoff) fixHistory.shift();
 
   if (fixHistory.length < 2) return;
   const first = fixHistory[0];
-  const last = fixHistory[fixHistory.length - 1];
-  const dt = Math.max(0.001, (last.tsMs - first.tsMs) / 1000.0);
-  const distM = haversineM(first.lat, first.lon, last.lat, last.lon);
+  const lastFix = fixHistory[fixHistory.length - 1];
+  const dt = Math.max(0.001, (lastFix.tsMs - first.tsMs) / 1000.0);
+  const distM = haversineM(first.lat, first.lon, lastFix.lat, lastFix.lon);
   const sogKn = (distM / dt) * KNOTS_PER_MPS;
   if (!Number.isFinite(sogKn) || sogKn <= 0 || sogKn > 40) return;
-
-  const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
 
   // En BLE directo (sin backend) queremos refrescar continuamente; con backend no machacamos su cálculo.
   if (!backendActive || typeof state.sog_knots !== "number") state.sog_knots = sogKn;
   if (!backendActive || typeof state.cog_deg !== "number") {
-    state.cog_deg = bearingDeg(first.lat, first.lon, last.lat, last.lon);
+    state.cog_deg = bearingDeg(first.lat, first.lon, lastFix.lat, lastFix.lon);
   }
 }
 
@@ -1448,6 +1464,7 @@ class AtlasWebBleClient {
     this.mainChar = null;
     this.compactChar = null;
     this.pollTimer = null;
+    this.pollInFlight = false;
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
     this.onDisconnected = this.onDisconnected.bind(this);
@@ -1603,6 +1620,8 @@ class AtlasWebBleClient {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(async () => {
       if (!this.server?.connected) return;
+      if (this.pollInFlight) return;
+      this.pollInFlight = true;
       const now = Date.now();
       const staleMain = now - this.lastMainTs > 1200;
       const staleCompact = now - this.lastCompactTs > 1200;
@@ -1619,8 +1638,10 @@ class AtlasWebBleClient {
         }
       } catch {
         // ignore
+      } finally {
+        this.pollInFlight = false;
       }
-    }, 250);
+    }, 400);
   }
 
   disconnect() {

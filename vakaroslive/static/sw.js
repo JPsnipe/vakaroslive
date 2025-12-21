@@ -1,4 +1,4 @@
-const CACHE = "vakaroslive-v15";
+const CACHE = "vakaroslive-v16";
 const ASSETS = ["./", "./app.js", "./styles.css", "./leaflet.css", "./leaflet.js", "./manifest.webmanifest", "./icon.svg", "./.nojekyll"];
 
 self.addEventListener("install", (event) => {
