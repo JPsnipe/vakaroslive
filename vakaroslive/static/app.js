@@ -5,8 +5,11 @@ function setText(el, value) {
   el.textContent = value;
 }
 
+const APP_VERSION = "v22";
+
 const els = {
   status: $("status"),
+  appVersion: $("appVersion"),
   navHdg: $("navHdg"),
   navSog: $("navSog"),
   navCog: $("navCog"),
@@ -2138,6 +2141,11 @@ els.bleDisconnect?.addEventListener("click", () => {
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { });
+}
+
+setText(els.appVersion, APP_VERSION);
+if (document?.title?.startsWith("VakarosLive")) {
+  document.title = `VakarosLive ${APP_VERSION}`;
 }
 
 initCardCollapsing();
