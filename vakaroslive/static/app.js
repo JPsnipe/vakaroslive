@@ -49,6 +49,7 @@ const els = {
   targetEta: $("targetEta"),
   perfChart: $("perfChart"),
   bleConnect: $("bleConnect"),
+  bleConnectAll: $("bleConnectAll"),
   bleDisconnect: $("bleDisconnect"),
   bleInfo: $("bleInfo"),
   scan: $("scan"),
@@ -1257,34 +1258,42 @@ class AtlasWebBleClient {
     this.onCompact = this.onCompact.bind(this);
   }
 
-  async connect() {
+  async connect(options = {}) {
     if (!supportsWebBluetooth()) throw new Error("Web Bluetooth no disponible");
     setBleUi(false, "Selecciona el Atlas 2…");
 
     // Algunos firmwares no anuncian el servicio propietario hasta estar conectados.
     // En ese caso, filtrar por servicio deja el selector vacío en Android.
     // Preferimos filtrar por nombre y ofrecemos fallback a "mostrar todos".
-    try {
+    const acceptAll = !!options.acceptAllDevices;
+    if (acceptAll) {
       this.device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: "Atlas" }, { services: [VAKAROS_SERVICE_UUID] }],
+        acceptAllDevices: true,
         optionalServices: [VAKAROS_SERVICE_UUID],
       });
-    } catch (e) {
-      const name = e?.name || "";
-      if (name === "NotFoundError") {
-        const ok = confirm(
-          "No aparece ningún dispositivo.\n\n¿Quieres mostrar TODOS los BLE cercanos? (puede haber muchos)\n\nTip: asegúrate de que Ubicación está activada y Vakaros Connect está cerrado.",
-        );
-        if (ok) {
-          this.device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: [VAKAROS_SERVICE_UUID],
-          });
+    } else {
+      try {
+        this.device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "Atlas" }, { services: [VAKAROS_SERVICE_UUID] }],
+          optionalServices: [VAKAROS_SERVICE_UUID],
+        });
+      } catch (e) {
+        const name = e?.name || "";
+        if (name === "NotFoundError") {
+          const ok = confirm(
+            "Si el selector se queda buscando sin mostrar dispositivos, pulsa Atrás para cancelar.\n\n¿Quieres mostrar TODOS los BLE cercanos? (puede haber muchos)\n\nTip: Ubicación activada + Vakaros Connect cerrado.",
+          );
+          if (ok) {
+            this.device = await navigator.bluetooth.requestDevice({
+              acceptAllDevices: true,
+              optionalServices: [VAKAROS_SERVICE_UUID],
+            });
+          } else {
+            throw e;
+          }
         } else {
           throw e;
         }
-      } else {
-        throw e;
       }
     }
 
@@ -1476,6 +1485,10 @@ function sendCmd(type, extra = {}) {
 }
 
 async function scanDevices() {
+  if (IS_GH_PAGES) {
+    els.scanInfo.textContent = "Solo disponible con backend (PC).";
+    return;
+  }
   els.scan.disabled = true;
   els.scanInfo.textContent = "Escaneando...";
   els.deviceList.innerHTML = "";
@@ -1565,6 +1578,16 @@ els.bleConnect?.addEventListener("click", async () => {
   try {
     if (!bleClient) bleClient = new AtlasWebBleClient();
     await bleClient.connect();
+  } catch (e) {
+    setBleUi(false, shortErr(e?.message || String(e)));
+    applyBlePartialState({ last_error: String(e?.message || e), connected: false });
+  }
+});
+
+els.bleConnectAll?.addEventListener("click", async () => {
+  try {
+    if (!bleClient) bleClient = new AtlasWebBleClient();
+    await bleClient.connect({ acceptAllDevices: true });
   } catch (e) {
     setBleUi(false, shortErr(e?.message || String(e)));
     applyBlePartialState({ last_error: String(e?.message || e), connected: false });
