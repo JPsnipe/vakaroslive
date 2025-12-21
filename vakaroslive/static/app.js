@@ -563,10 +563,13 @@ function deriveSogCogInPlace(state) {
   const sogKn = (distM / dt) * KNOTS_PER_MPS;
   if (!Number.isFinite(sogKn) || sogKn <= 0 || sogKn > 40) return;
 
-  // No machacar valores que ya vengan del backend.
-  if (typeof state.sog_knots !== "number") state.sog_knots = sogKn;
-  if (typeof state.cog_deg !== "number")
+  const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
+
+  // En BLE directo (sin backend) queremos refrescar continuamente; con backend no machacamos su cálculo.
+  if (!backendActive || typeof state.sog_knots !== "number") state.sog_knots = sogKn;
+  if (!backendActive || typeof state.cog_deg !== "number") {
     state.cog_deg = bearingDeg(first.lat, first.lon, last.lat, last.lon);
+  }
 }
 
 function pushPerfSample(state) {
