@@ -1359,8 +1359,9 @@ function applyState(state) {
     }
   }
 
-  setText(els.heel, typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "—");
-  setText(els.pitch, typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "—");
+  // Atlas: en la práctica estos dos campos vienen invertidos (heel/pitch).
+  setText(els.heel, typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "-");
+  setText(els.pitch, typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "-");
   setText(els.field6, typeof state.main_field_6 === "number" ? fmtNum(state.main_field_6, 3) : "—");
   setText(els.compact2, typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—");
 
