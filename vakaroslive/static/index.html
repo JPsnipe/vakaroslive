@@ -25,8 +25,11 @@
   </header>
 
   <main class="grid">
-    <section class="card card--wide">
-      <div class="card__title">Navegación</div>
+    <section class="card card--wide" data-card="nav">
+      <div class="card__title">
+        <span>Navegación</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
       <div class="nav2">
         <div class="nav2__block">
           <div class="muted">HDG (mag)</div>
@@ -45,8 +48,11 @@
       </div>
     </section>
 
-    <section class="card">
-      <div class="card__title">Marca</div>
+    <section class="card" data-card="mark">
+      <div class="card__title">
+        <span>Marca</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
       <div class="row">
         <button id="setMark" class="btn">Guardar marca</button>
         <button id="clearMark" class="btn btn--ghost">Borrar</button>
@@ -55,8 +61,11 @@
       <div class="kv"><span class="k">BRG</span><span class="v" id="markBrg">-</span></div>
     </section>
 
-    <section class="card card--wide">
-      <div class="card__title">Actitud (Atlas)</div>
+    <section class="card card--wide" data-card="attitude">
+      <div class="card__title">
+        <span>Actitud (Atlas)</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
       <div class="metrics metrics--4">
         <div class="kv"><span class="k">Heel</span><span class="v" id="heel">-</span></div>
         <div class="kv"><span class="k">Pitch</span><span class="v" id="pitch">-</span></div>
@@ -66,8 +75,11 @@
       <div class="muted">Nota: campos por confirmar; se muestran tal cual.</div>
     </section>
 
-    <section class="card card--wide">
-      <div class="card__title">Balizas</div>
+    <section class="card card--wide" data-card="race">
+      <div class="card__title">
+        <span>Balizas</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
       <div class="row">
         <span class="muted">Tipo</span>
         <select id="courseType" class="select" style="width:auto">
@@ -103,6 +115,7 @@
         <div class="kv"><span class="k">BRG</span><span class="v" id="targetBrg">-</span></div>
         <div class="kv"><span class="k">CMG</span><span class="v" id="targetCmg">-</span></div>
         <div class="kv"><span class="k">ETA</span><span class="v" id="targetEta">-</span></div>
+        <div class="kv"><span class="k">ETA Layline</span><span class="v" id="targetLaylineEta">-</span></div>
       </div>
       <div class="chart">
         <canvas id="perfChart" class="chart__canvas"></canvas>
@@ -115,8 +128,11 @@
       </div>
     </section>
 
-    <section class="card card--wide">
-      <div class="card__title">Salida (línea)</div>
+    <section class="card card--wide" data-card="start">
+      <div class="card__title">
+        <span>Salida (línea)</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
       <div class="row">
         <button id="setPin" class="btn">Set PIN</button>
         <button id="setRcb" class="btn">Set RCB</button>
@@ -135,14 +151,16 @@
       </div>
     </section>
 
-    <section class="card card--wide">
+    <section class="card card--wide" data-card="map">
       <div class="card__title">
-        Mapa
+        <span>Mapa</span>
         <div class="map-controls">
           <button id="mapTypeStreet" class="map-btn map-btn--active">Calles</button>
           <button id="mapTypeSat" class="map-btn">Satélite</button>
           <button id="mapTypeNautical" class="map-btn">Náutico</button>
           <button id="mapCenter" class="map-btn">Centrar</button>
+          <button id="mapFullscreen" class="map-btn" aria-label="Mapa a pantalla completa">Full</button>
+          <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
         </div>
       </div>
       <div id="map" class="map"></div>

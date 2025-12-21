@@ -18,6 +18,7 @@ const els = {
   mapTypeSat: $("mapTypeSat"),
   mapTypeNautical: $("mapTypeNautical"),
   mapCenter: $("mapCenter"),
+  mapFullscreen: $("mapFullscreen"),
   setMark: $("setMark"),
   clearMark: $("clearMark"),
   markDist: $("markDist"),
@@ -51,6 +52,7 @@ const els = {
   targetBrg: $("targetBrg"),
   targetCmg: $("targetCmg"),
   targetEta: $("targetEta"),
+  targetLaylineEta: $("targetLaylineEta"),
   perfChart: $("perfChart"),
   bleConnect: $("bleConnect"),
   bleConnectAll: $("bleConnectAll"),
@@ -322,6 +324,32 @@ function centerMap() {
     const bounds = L.latLngBounds(points);
     map.fitBounds(bounds, { padding: [50, 50] });
   }
+}
+
+let mapFullscreenOn = false;
+let mapCollapsedBeforeFullscreen = null;
+
+function setMapFullscreen(on) {
+  const next = !!on;
+  if (mapFullscreenOn === next) return;
+  mapFullscreenOn = next;
+
+  const mapCard = document.querySelector('.card[data-card="map"]');
+  if (mapFullscreenOn) {
+    mapCollapsedBeforeFullscreen = mapCard ? mapCard.classList.contains("card--collapsed") : null;
+    if (mapCard) setCardCollapsed(mapCard, false, { persist: false });
+    document.body.classList.add("map-fullscreen");
+    if (els.mapFullscreen) els.mapFullscreen.textContent = "Cerrar";
+  } else {
+    document.body.classList.remove("map-fullscreen");
+    if (els.mapFullscreen) els.mapFullscreen.textContent = "Full";
+    if (mapCard && mapCollapsedBeforeFullscreen) {
+      setCardCollapsed(mapCard, true, { persist: false });
+    }
+    mapCollapsedBeforeFullscreen = null;
+  }
+
+  setTimeout(() => map?.invalidateSize?.(), 60);
 }
 
 function dotIcon(color, text) {
@@ -1076,37 +1104,38 @@ function drawTrack() {
   drawLaylines();
 }
 
+function courseBottomPoint() {
+  if (leewardPort && leewardStarboard) return midpointPoint(leewardPort, leewardStarboard);
+  if (leewardPort) return leewardPort;
+  if (leewardStarboard) return leewardStarboard;
+  if (startLine?.pin && startLine?.rcb) return midpointPoint(startLine.pin, startLine.rcb);
+  return null;
+}
+
+function upwindAxisDeg(fallbackPoint) {
+  const bottom = courseBottomPoint();
+  const up = windward || fallbackPoint;
+  if (!bottom || !up) return null;
+  return bearingDeg(bottom.lat, bottom.lon, up.lat, up.lon);
+}
+
+function laylineAnchorPoint() {
+  const t = targetPointForId(targetId);
+  if (t && (targetId === "windward" || targetId === "mark")) return t;
+  return windward;
+}
+
 function drawLaylines() {
   const laylineDist = 3000; // 3km
   const lines = [];
 
-  // Windward Laylines (assuming axis is Leeward/Start -> Windward)
-  if (windward && (leewardPort || leewardStarboard || startLine?.pin)) {
-    // Determine bottom mark (reference for axis)
-    let bottom = null;
-    if (leewardPort && leewardStarboard) {
-      bottom = midpointPoint(leewardPort, leewardStarboard);
-    } else if (leewardPort) {
-      bottom = leewardPort;
-    } else if (leewardStarboard) {
-      bottom = leewardStarboard;
-    } else if (startLine?.pin && startLine?.rcb) {
-      bottom = midpointPoint(startLine.pin, startLine.rcb);
-    }
-
-    if (bottom) {
-      const axis = bearingDeg(bottom.lat, bottom.lon, windward.lat, windward.lon);
-
-      // Starboard Tack Layline (Wind from Axis): approach from right side (looking upwind)
-      // Bearing TO mark = Axis + 135
-      const p1 = projectPoint(windward.lat, windward.lon, axis + 135, laylineDist);
-      lines.push([[windward.lat, windward.lon], [p1.lat, p1.lon]]);
-
-      // Port Tack Layline
-      // Bearing TO mark = Axis + 225 (or axis - 135)
-      const p2 = projectPoint(windward.lat, windward.lon, axis + 225, laylineDist);
-      lines.push([[windward.lat, windward.lon], [p2.lat, p2.lon]]);
-    }
+  const anchor = laylineAnchorPoint();
+  const axis = upwindAxisDeg(anchor);
+  if (anchor && typeof axis === "number") {
+    const p1 = projectPoint(anchor.lat, anchor.lon, axis + 135, laylineDist);
+    lines.push([[anchor.lat, anchor.lon], [p1.lat, p1.lon]]);
+    const p2 = projectPoint(anchor.lat, anchor.lon, axis + 225, laylineDist);
+    lines.push([[anchor.lat, anchor.lon], [p2.lat, p2.lon]]);
   }
 
   // TODO: Leeward laylines (gybing angles) if needed?
@@ -1126,6 +1155,84 @@ function drawLaylines() {
     map.removeLayer(laylinesPolyline);
     laylinesPolyline = null;
   }
+}
+
+function cross2(a, b) {
+  return a.x * b.y - a.y * b.x;
+}
+
+function computeLaylineEtasForTarget(targetPoint) {
+  if (!targetPoint) return null;
+
+  const axis = upwindAxisDeg(targetPoint);
+  if (typeof axis !== "number") return null;
+
+  const lat = lastState?.latitude;
+  const lon = lastState?.longitude;
+  const sogKn = lastState?.sog_knots;
+  const cogDeg = lastState?.cog_deg;
+
+  if (
+    typeof lat !== "number" ||
+    typeof lon !== "number" ||
+    typeof sogKn !== "number" ||
+    typeof cogDeg !== "number" ||
+    sogKn <= 0.05 ||
+    sogKn > 40
+  ) {
+    return null;
+  }
+
+  const toRad = (x) => (x * Math.PI) / 180.0;
+  const R = 6371000.0;
+  const lat0 = toRad(targetPoint.lat);
+  const lon0 = toRad(targetPoint.lon);
+  const phi = toRad(lat);
+  const lambda = toRad(lon);
+  const p = {
+    x: (lambda - lon0) * Math.cos(lat0) * R,
+    y: (phi - lat0) * R,
+  };
+
+  const sogMps = sogKn / KNOTS_PER_MPS;
+  const cog = toRad(cogDeg);
+  const v = {
+    x: Math.sin(cog) * sogMps,
+    y: Math.cos(cog) * sogMps,
+  };
+
+  const timeToLaylineS = (bearingDeg) => {
+    const brg = toRad(((bearingDeg % 360) + 360) % 360);
+    const d = { x: Math.sin(brg), y: Math.cos(brg) }; // ray from mark downwind
+    const det = cross2(d, v);
+    if (Math.abs(det) < 1e-6) return null;
+
+    const rhs = { x: -p.x, y: -p.y };
+    const t = cross2(d, rhs) / det;
+    const u = cross2(v, rhs) / det;
+    if (!Number.isFinite(t) || !Number.isFinite(u) || t < 0 || u < 0) return null;
+    return t;
+  };
+
+  return {
+    starboardS: timeToLaylineS(axis + 135),
+    portS: timeToLaylineS(axis + 225),
+  };
+}
+
+function formatLaylineEtaText(targetPoint) {
+  const show = targetId === "windward" || targetId === "mark";
+  if (!show) return "—";
+
+  const etas = computeLaylineEtasForTarget(targetPoint);
+  if (!etas) return "—";
+
+  const hasAny = typeof etas.starboardS === "number" || typeof etas.portS === "number";
+  if (!hasAny) return "—";
+
+  const es = typeof etas.starboardS === "number" ? fmtDuration(etas.starboardS) : "—";
+  const ba = typeof etas.portS === "number" ? fmtDuration(etas.portS) : "—";
+  return `ES ${es} · BA ${ba}`;
 }
 
 function updateMarkStats() {
@@ -1156,6 +1263,7 @@ function updateMarkStats() {
 
 function updateTargetStats() {
   if (!els.targetDist) return;
+  if (els.targetLaylineEta) els.targetLaylineEta.textContent = "—";
 
   const targetLabel = targetLabelForId(targetId);
   const targetPoint = targetPointForId(targetId);
@@ -1225,6 +1333,10 @@ function updateTargetStats() {
     els.targetEta.textContent = fmtDuration(distM / Math.max(0.01, cmgMps));
   } else {
     els.targetEta.textContent = "—";
+  }
+
+  if (els.targetLaylineEta) {
+    els.targetLaylineEta.textContent = formatLaylineEtaText(targetPoint);
   }
 }
 
@@ -1769,6 +1881,60 @@ async function scanDevices() {
   }
 }
 
+const CARD_COLLAPSE_PREFIX = "vkl_card_collapsed_v1:";
+
+function setCardCollapsed(card, collapsed, opts = {}) {
+  if (!card) return;
+  const key = card.dataset?.card || "";
+  card.classList.toggle("card--collapsed", !!collapsed);
+
+  const toggle = card.querySelector("[data-card-toggle]");
+  if (toggle) {
+    toggle.textContent = collapsed ? "▸" : "▾";
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.setAttribute("aria-label", collapsed ? "Expandir" : "Minimizar");
+  }
+
+  if (opts.persist !== false && key) {
+    try {
+      localStorage.setItem(`${CARD_COLLAPSE_PREFIX}${key}`, collapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!collapsed && key === "map") {
+    setTimeout(() => map?.invalidateSize?.(), 50);
+  }
+  if (!collapsed && key === "race") {
+    scheduleChartDraw();
+  }
+}
+
+function initCardCollapsing() {
+  const cards = document.querySelectorAll(".card[data-card]");
+  for (const card of cards) {
+    const key = card.dataset?.card || "";
+    const toggle = card.querySelector("[data-card-toggle]");
+    if (!key || !toggle) continue;
+
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(`${CARD_COLLAPSE_PREFIX}${key}`) === "1";
+    } catch {
+      collapsed = false;
+    }
+    setCardCollapsed(card, collapsed, { persist: false });
+
+    toggle.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (key === "map" && document.body.classList.contains("map-fullscreen")) return;
+      setCardCollapsed(card, !card.classList.contains("card--collapsed"));
+    });
+  }
+}
+
 els.setMark?.addEventListener("click", () => {
   sendCmd("set_mark");
 });
@@ -1831,6 +1997,7 @@ els.mapTypeStreet?.addEventListener("click", () => setMapLayer("street"));
 els.mapTypeSat?.addEventListener("click", () => setMapLayer("sat"));
 els.mapTypeNautical?.addEventListener("click", () => setMapLayer("nautical"));
 els.mapCenter?.addEventListener("click", () => centerMap());
+els.mapFullscreen?.addEventListener("click", () => setMapFullscreen(!mapFullscreenOn));
 
 els.bleConnect?.addEventListener("click", async () => {
   try {
@@ -1864,6 +2031,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { });
 }
 
+initCardCollapsing();
 initMap();
 setBleUi(false, "—");
 
@@ -1897,3 +2065,6 @@ applyState(lastState);
 // Si hay backend, se impondrá al conectar por WS.
 if (wsWanted) connectWs();
 window.addEventListener("resize", () => scheduleChartDraw());
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") setMapFullscreen(false);
+});
