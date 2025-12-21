@@ -14,7 +14,14 @@
 <body>
   <header class="header">
     <div class="title">VakarosLive</div>
-    <div id="status" class="status status--disconnected">Desconectado</div>
+    <div class="header__right">
+      <div class="header__ble">
+        <button id="bleConnect" class="btn btn--sm">Conectar BLE</button>
+        <button id="bleDisconnect" class="btn btn--ghost btn--sm" disabled>Desconectar</button>
+        <span class="muted" id="bleInfo">-</span>
+      </div>
+      <div id="status" class="status status--disconnected">Desconectado</div>
+    </div>
   </header>
 
   <main class="grid">
@@ -23,18 +30,18 @@
       <div class="nav2">
         <div class="nav2__block">
           <div class="muted">HDG (mag)</div>
-          <div class="big" id="navHdg">—</div>
+          <div class="big" id="navHdg">-</div>
         </div>
         <div class="nav2__block">
           <div class="muted">SOG</div>
-          <div class="big" id="navSog">—</div>
+          <div class="big" id="navSog">-</div>
         </div>
       </div>
       <div class="metrics metrics--4">
-        <div class="kv"><span class="k">COG</span><span class="v" id="navCog">—</span></div>
-        <div class="kv"><span class="k">Δ (COG-HDG)</span><span class="v" id="navDelta">—</span></div>
-        <div class="kv"><span class="k">Fuente</span><span class="v" id="navSrc">—</span></div>
-        <div class="kv"><span class="k">Última</span><span class="v" id="navLast">—</span></div>
+        <div class="kv"><span class="k">COG</span><span class="v" id="navCog">-</span></div>
+        <div class="kv"><span class="k">Δ (COG-HDG)</span><span class="v" id="navDelta">-</span></div>
+        <div class="kv"><span class="k">Fuente</span><span class="v" id="navSrc">-</span></div>
+        <div class="kv"><span class="k">Última</span><span class="v" id="navLast">-</span></div>
       </div>
     </section>
 
@@ -44,17 +51,17 @@
         <button id="setMark" class="btn">Guardar marca</button>
         <button id="clearMark" class="btn btn--ghost">Borrar</button>
       </div>
-      <div class="kv"><span class="k">Dist</span><span class="v" id="markDist">—</span></div>
-      <div class="kv"><span class="k">BRG</span><span class="v" id="markBrg">—</span></div>
+      <div class="kv"><span class="k">Dist</span><span class="v" id="markDist">-</span></div>
+      <div class="kv"><span class="k">BRG</span><span class="v" id="markBrg">-</span></div>
     </section>
 
     <section class="card card--wide">
       <div class="card__title">Actitud (Atlas)</div>
       <div class="metrics metrics--4">
-        <div class="kv"><span class="k">Heel</span><span class="v" id="heel">—</span></div>
-        <div class="kv"><span class="k">Pitch</span><span class="v" id="pitch">—</span></div>
-        <div class="kv"><span class="k">Field 6</span><span class="v" id="field6">—</span></div>
-        <div class="kv"><span class="k">Compact 2</span><span class="v" id="compact2">—</span></div>
+        <div class="kv"><span class="k">Heel</span><span class="v" id="heel">-</span></div>
+        <div class="kv"><span class="k">Pitch</span><span class="v" id="pitch">-</span></div>
+        <div class="kv"><span class="k">Field 6</span><span class="v" id="field6">-</span></div>
+        <div class="kv"><span class="k">Compact 2</span><span class="v" id="compact2">-</span></div>
       </div>
       <div class="muted">Nota: campos por confirmar; se muestran tal cual.</div>
     </section>
@@ -80,7 +87,7 @@
       <div class="row">
         <span class="muted">Objetivo</span>
         <select id="targetSelect" class="select">
-          <option value="">—</option>
+          <option value="">-</option>
           <option value="mark">Marca</option>
           <option value="windward">Barlovento</option>
           <option value="leeward_gate">Sotavento (puerta)</option>
@@ -89,13 +96,13 @@
           <option value="wing">Wing (Gybe)</option>
           <option value="reach">Reach</option>
         </select>
-        <span class="muted" id="targetHint">—</span>
+        <span class="muted" id="targetHint">-</span>
       </div>
       <div class="metrics">
-        <div class="kv"><span class="k">Dist</span><span class="v" id="targetDist">—</span></div>
-        <div class="kv"><span class="k">BRG</span><span class="v" id="targetBrg">—</span></div>
-        <div class="kv"><span class="k">CMG</span><span class="v" id="targetCmg">—</span></div>
-        <div class="kv"><span class="k">ETA</span><span class="v" id="targetEta">—</span></div>
+        <div class="kv"><span class="k">Dist</span><span class="v" id="targetDist">-</span></div>
+        <div class="kv"><span class="k">BRG</span><span class="v" id="targetBrg">-</span></div>
+        <div class="kv"><span class="k">CMG</span><span class="v" id="targetCmg">-</span></div>
+        <div class="kv"><span class="k">ETA</span><span class="v" id="targetEta">-</span></div>
       </div>
       <div class="chart">
         <canvas id="perfChart" class="chart__canvas"></canvas>
@@ -114,17 +121,17 @@
         <button id="setPin" class="btn">Set PIN</button>
         <button id="setRcb" class="btn">Set RCB</button>
         <button id="clearStartLine" class="btn btn--ghost">Borrar línea</button>
-        <span class="muted" id="startSource">—</span>
+        <span class="muted" id="startSource">-</span>
       </div>
       <div class="metrics">
-        <div class="kv"><span class="k">PIN dist</span><span class="v" id="pinDist">—</span></div>
-        <div class="kv"><span class="k">PIN brg</span><span class="v" id="pinBrg">—</span></div>
-        <div class="kv"><span class="k">RCB dist</span><span class="v" id="rcbDist">—</span></div>
-        <div class="kv"><span class="k">RCB brg</span><span class="v" id="rcbBrg">—</span></div>
-        <div class="kv"><span class="k">Línea</span><span class="v" id="lineBrg">—</span></div>
-        <div class="kv"><span class="k">Largo</span><span class="v" id="lineLen">—</span></div>
-        <div class="kv"><span class="k">Dist a línea</span><span class="v" id="distLine">—</span></div>
-        <div class="kv"><span class="k">ETA línea</span><span class="v" id="etaLine">—</span></div>
+        <div class="kv"><span class="k">PIN dist</span><span class="v" id="pinDist">-</span></div>
+        <div class="kv"><span class="k">PIN brg</span><span class="v" id="pinBrg">-</span></div>
+        <div class="kv"><span class="k">RCB dist</span><span class="v" id="rcbDist">-</span></div>
+        <div class="kv"><span class="k">RCB brg</span><span class="v" id="rcbBrg">-</span></div>
+        <div class="kv"><span class="k">Línea</span><span class="v" id="lineBrg">-</span></div>
+        <div class="kv"><span class="k">Largo</span><span class="v" id="lineLen">-</span></div>
+        <div class="kv"><span class="k">Dist a línea</span><span class="v" id="distLine">-</span></div>
+        <div class="kv"><span class="k">ETA línea</span><span class="v" id="etaLine">-</span></div>
       </div>
     </section>
 
@@ -139,34 +146,7 @@
         </div>
       </div>
       <div id="map" class="map"></div>
-      <div class="muted" id="lastUpdate">—</div>
-    </section>
-
-    <section class="card card--wide">
-      <div class="card__title">Conexión</div>
-      <div class="row">
-        <button id="bleConnect" class="btn">Conectar BLE (móvil)</button>
-        <button id="bleConnectAll" class="btn btn--ghost">Conectar (mostrar todos)</button>
-        <button id="bleDisconnect" class="btn btn--ghost" disabled>Desconectar</button>
-        <span class="muted" id="bleInfo">—</span>
-      </div>
-      <div class="muted">
-        Opción B: el móvil/tablet se conecta directamente al Atlas 2 por BLE. Requiere Chrome/Edge en Android (Web
-        Bluetooth).
-        En iPhone/iPad (Safari) no es compatible.
-      </div>
-    </section>
-
-    <section class="card card--wide">
-      <div class="card__title">Escaneo</div>
-      <div class="row">
-        <button id="scan" class="btn">Scan BLE</button>
-        <span class="muted" id="scanInfo"></span>
-      </div>
-      <div id="deviceList" class="deviceList"></div>
-      <div class="muted">
-        Si no aparece, abre Vakaros Connect 5–10s para “despertar” el Atlas 2.
-      </div>
+      <div class="muted" id="lastUpdate">-</div>
     </section>
   </main>
 

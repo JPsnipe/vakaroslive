@@ -56,12 +56,33 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1000;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .title {
   font-weight: 700;
   letter-spacing: 0.3px;
+}
+
+.header__right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.header__ble {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .status {
@@ -171,6 +192,11 @@ body {
   padding: var(--btn-pad-y) var(--btn-pad-x);
   font-weight: 700;
   font-size: var(--control-font);
+}
+
+.btn--sm {
+  padding: 8px 10px;
+  font-size: 13px;
 }
 
 .btn--ghost {
