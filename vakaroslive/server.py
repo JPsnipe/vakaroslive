@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 import time
 from typing import Any
@@ -22,6 +23,7 @@ class TelemetryHub:
         self.state = AtlasState()
         self._clients: set[web.WebSocketResponse] = set()
         self._persist_path = persist_path
+        self._logger = logging.getLogger(__name__)
         self._load_persisted()
 
     def _load_persisted(self) -> None:
@@ -34,7 +36,8 @@ class TelemetryHub:
             self.state.marks = RaceMarks.from_dict(marks)
         except FileNotFoundError:
             return
-        except Exception:
+        except Exception as exc:
+            self._logger.warning("Failed to load persisted marks: %s", exc)
             return
 
     def _save_persisted(self) -> None:
@@ -98,6 +101,18 @@ class TelemetryHub:
                 return
             self.state.marks.leeward_starboard = point
             self.state.marks.source = "manual"
+        elif ctype == "set_wing":
+            point = point_from_cmd_or_current()
+            if not point:
+                return
+            self.state.marks.wing_mark = point
+            self.state.marks.source = "manual"
+        elif ctype == "set_reach":
+            point = point_from_cmd_or_current()
+            if not point:
+                return
+            self.state.marks.reach_mark = point
+            self.state.marks.source = "manual"
         elif ctype == "clear_leeward_gate":
             self.state.marks.leeward_port = None
             self.state.marks.leeward_starboard = None
@@ -105,11 +120,15 @@ class TelemetryHub:
             self.state.marks.windward = None
             self.state.marks.leeward_port = None
             self.state.marks.leeward_starboard = None
+            self.state.marks.wing_mark = None
+            self.state.marks.reach_mark = None
             if self.state.marks.target in {
                 "windward",
                 "leeward_port",
                 "leeward_starboard",
                 "leeward_gate",
+                "wing",
+                "reach",
             }:
                 self.state.marks.target = None
         elif ctype == "set_start_pin":
@@ -144,6 +163,13 @@ class TelemetryHub:
             if not isinstance(enabled, bool):
                 return
             self.state.marks.start_line_follow_atlas = enabled
+        elif ctype == "set_course_type":
+            course_type = cmd.get("course_type")
+            allowed = {"W/L", "Triangle", "Trapezoid"}
+            if course_type not in allowed:
+                return
+            self.state.marks.course_type = course_type
+            self.state.marks.source = "manual"
         elif ctype == "set_target":
             target = cmd.get("target")
             allowed = {
@@ -153,6 +179,8 @@ class TelemetryHub:
                 "leeward_port",
                 "leeward_starboard",
                 "leeward_gate",
+                "wing",
+                "reach",
             }
             if target not in allowed:
                 return

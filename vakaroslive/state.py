@@ -39,8 +39,11 @@ class RaceMarks:
     windward: GeoPoint | None = None
     leeward_port: GeoPoint | None = None
     leeward_starboard: GeoPoint | None = None
+    wing_mark: GeoPoint | None = None
+    reach_mark: GeoPoint | None = None
+    course_type: str | None = None  # "W/L" | "Triangle" | "Trapezoid"
     source: str | None = None  # "manual" | "atlas"
-    target: str | None = None  # "mark" | "windward" | "leeward_port" | "leeward_starboard" | "leeward_gate"
+    target: str | None = None  # "mark" | "windward" | "leeward_port" | "leeward_starboard" | "leeward_gate" | "wing" | "reach"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +56,9 @@ class RaceMarks:
             "leeward_starboard": self.leeward_starboard.to_dict()
             if self.leeward_starboard
             else None,
+            "wing_mark": self.wing_mark.to_dict() if self.wing_mark else None,
+            "reach_mark": self.reach_mark.to_dict() if self.reach_mark else None,
+            "course_type": self.course_type,
             "source": self.source,
             "target": self.target,
         }
@@ -74,6 +80,12 @@ class RaceMarks:
             marks.leeward_port = GeoPoint.from_dict(data["leeward_port"])
         if data.get("leeward_starboard"):
             marks.leeward_starboard = GeoPoint.from_dict(data["leeward_starboard"])
+        if data.get("wing_mark"):
+            marks.wing_mark = GeoPoint.from_dict(data["wing_mark"])
+        if data.get("reach_mark"):
+            marks.reach_mark = GeoPoint.from_dict(data["reach_mark"])
+        if "course_type" in data:
+            marks.course_type = data.get("course_type")
         marks.source = data.get("source")
         marks.target = data.get("target")
         return marks
