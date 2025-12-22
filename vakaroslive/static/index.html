@@ -179,17 +179,75 @@
         <span>Expert parameters</span>
         <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
       </div>
+      <div class="muted">Estilo B&amp;G: damping por dato. OFF = raw (sin suavizado).</div>
+
       <div class="expert-row">
         <div class="expert-label">
-          <div class="expert-title">Damping dinámico</div>
-          <div class="muted">Suaviza HDG/COG/SOG y métricas derivadas.</div>
+          <div class="expert-title">Heading (HDG)</div>
+          <div class="muted">Rumbo magnético mostrado en la UI.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingScale" type="range" min="0.6" max="1.8" step="0.05" value="1" />
-          <div class="muted mono" id="dampingScaleValue">1.00x</div>
+          <input id="dampingHeading" type="range" min="0" max="10" step="1" value="5" />
+          <div class="muted mono" id="dampingHeadingValue">5</div>
         </div>
       </div>
-      <div class="muted">Avanzado: valores altos = más estabilidad, valores bajos = más respuesta.</div>
+
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">COG</div>
+          <div class="muted">Course Over Ground.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingCog" type="range" min="0" max="10" step="1" value="5" />
+          <div class="muted mono" id="dampingCogValue">5</div>
+        </div>
+      </div>
+
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">SOG</div>
+          <div class="muted">Speed Over Ground.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingSog" type="range" min="0" max="10" step="1" value="5" />
+          <div class="muted mono" id="dampingSogValue">5</div>
+        </div>
+      </div>
+
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">Heel</div>
+          <div class="muted">Escora.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingHeel" type="range" min="0" max="10" step="1" value="4" />
+          <div class="muted mono" id="dampingHeelValue">4</div>
+        </div>
+      </div>
+
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">Pitch</div>
+          <div class="muted">Cabeceo.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingPitch" type="range" min="0" max="10" step="1" value="4" />
+          <div class="muted mono" id="dampingPitchValue">4</div>
+        </div>
+      </div>
+
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">Posición</div>
+          <div class="muted">Lat/Lon (distancias/ETA). El track del mapa usa GPS crudo.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingPosition" type="range" min="0" max="10" step="1" value="3" />
+          <div class="muted mono" id="dampingPositionValue">3</div>
+        </div>
+      </div>
+
+      <div class="muted">Más damping = más estabilidad, menos damping = más respuesta.</div>
     </section>
   </main>
 

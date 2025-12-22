@@ -197,7 +197,9 @@ class AtlasState:
         return json.dumps({"marks": self.marks.to_dict()}, ensure_ascii=False, indent=2)
 
     def _apply_atlas_start_line_candidates(self, event: dict[str, Any]) -> bool:
-        if not self.marks.start_line_follow_atlas:
+        source = str(event.get("source") or "")
+        from_command = source.startswith("command_")
+        if not self.marks.start_line_follow_atlas and not from_command:
             return False
         candidates = event.get("candidates")
         if not isinstance(candidates, list) or not candidates:
