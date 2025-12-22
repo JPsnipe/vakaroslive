@@ -109,6 +109,7 @@ class AtlasState:
     main_field_4: float | None = None
     main_field_5: float | None = None
     main_field_6: float | None = None
+    main_cog_test_deg: float | None = None
     main_reserved_hex: str | None = None
     main_tail_hex: str | None = None
     main_raw_len: int | None = None
@@ -144,6 +145,7 @@ class AtlasState:
             "main_field_4": self.main_field_4,
             "main_field_5": self.main_field_5,
             "main_field_6": self.main_field_6,
+            "main_cog_test_deg": self.main_cog_test_deg,
             "main_reserved_hex": self.main_reserved_hex,
             "main_tail_hex": self.main_tail_hex,
             "main_raw_len": self.main_raw_len,
@@ -360,6 +362,7 @@ class AtlasState:
         field_4 = event.get("field_4")
         field_5 = event.get("field_5")
         field_6 = event.get("field_6")
+        cog_test_deg = event.get("cog_test_deg")
         reserved_hex = event.get("reserved_hex")
         tail_hex = event.get("tail_hex")
         raw_len = event.get("raw_len")
@@ -403,6 +406,8 @@ class AtlasState:
             if 0.0 <= sog_kn <= 60.0:
                 self.sog_knots = sog_kn
                 self._last_field6_sog_ts_ms = int(self.last_event_ts_ms)
+        if isinstance(cog_test_deg, (int, float)) and math.isfinite(cog_test_deg):
+            self.main_cog_test_deg = float(cog_test_deg)
         if isinstance(reserved_hex, str):
             self.main_reserved_hex = reserved_hex
         if isinstance(tail_hex, str) or tail_hex is None:

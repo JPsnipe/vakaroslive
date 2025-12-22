@@ -75,6 +75,7 @@
         <div class="kv"><span class="k">Heel</span><span class="v" id="heel">-</span></div>
         <div class="kv"><span class="k">Pitch</span><span class="v" id="pitch">-</span></div>
         <div class="kv"><span class="k">SOG (m/s)</span><span class="v" id="field6">-</span></div>
+        <div class="kv"><span class="k">COG test</span><span class="v" id="cogTest">-</span></div>
         <div class="kv"><span class="k">Compact 2</span><span class="v" id="compact2">-</span></div>
       </div>
       <div class="muted" id="bleDebug">BLE: -</div>
@@ -187,8 +188,8 @@
           <div class="muted">Rumbo magnético mostrado en la UI.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingHeading" type="range" min="0" max="10" step="1" value="5" />
-          <div class="muted mono" id="dampingHeadingValue">5</div>
+          <input id="dampingHeading" type="range" min="0" max="20" step="1" value="10" />
+          <div class="muted mono" id="dampingHeadingValue">10</div>
         </div>
       </div>
 
@@ -198,8 +199,8 @@
           <div class="muted">Course Over Ground.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingCog" type="range" min="0" max="10" step="1" value="5" />
-          <div class="muted mono" id="dampingCogValue">5</div>
+          <input id="dampingCog" type="range" min="0" max="20" step="1" value="10" />
+          <div class="muted mono" id="dampingCogValue">10</div>
         </div>
       </div>
 
@@ -209,8 +210,8 @@
           <div class="muted">Speed Over Ground.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingSog" type="range" min="0" max="10" step="1" value="5" />
-          <div class="muted mono" id="dampingSogValue">5</div>
+          <input id="dampingSog" type="range" min="0" max="20" step="1" value="10" />
+          <div class="muted mono" id="dampingSogValue">10</div>
         </div>
       </div>
 
@@ -220,8 +221,8 @@
           <div class="muted">Escora.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingHeel" type="range" min="0" max="10" step="1" value="4" />
-          <div class="muted mono" id="dampingHeelValue">4</div>
+          <input id="dampingHeel" type="range" min="0" max="20" step="1" value="9" />
+          <div class="muted mono" id="dampingHeelValue">9</div>
         </div>
       </div>
 
@@ -231,8 +232,8 @@
           <div class="muted">Cabeceo.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingPitch" type="range" min="0" max="10" step="1" value="4" />
-          <div class="muted mono" id="dampingPitchValue">4</div>
+          <input id="dampingPitch" type="range" min="0" max="20" step="1" value="9" />
+          <div class="muted mono" id="dampingPitchValue">9</div>
         </div>
       </div>
 
@@ -242,8 +243,8 @@
           <div class="muted">Lat/Lon (distancias/ETA). El track del mapa usa GPS crudo.</div>
         </div>
         <div class="expert-control">
-          <input id="dampingPosition" type="range" min="0" max="10" step="1" value="3" />
-          <div class="muted mono" id="dampingPositionValue">3</div>
+          <input id="dampingPosition" type="range" min="0" max="20" step="1" value="8" />
+          <div class="muted mono" id="dampingPositionValue">8</div>
         </div>
       </div>
 

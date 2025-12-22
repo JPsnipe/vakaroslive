@@ -25,6 +25,7 @@ class TelemetryMain:
     field_4: float | None
     field_5: float | None
     field_6: float | None
+    cog_test_deg: float | None
     reserved_hex: str
     tail_hex: str | None
     raw_len: int
@@ -62,8 +63,9 @@ def parse_telemetry_main(data: bytes) -> TelemetryMain | None:
         field_4=_safe_f32(data, 20),
         field_5=_safe_f32(data, 24),
         field_6=_safe_f32(data, 28),
+        cog_test_deg=_safe_f32(data, 32),
         reserved_hex=data[2:8].hex(),
-        tail_hex=data[32:35].hex() if len(data) >= 35 else None,
+        tail_hex=data[32:36].hex() if len(data) >= 36 else None,
         raw_len=len(data),
     )
 

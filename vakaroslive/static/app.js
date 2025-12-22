@@ -34,6 +34,7 @@ const els = {
   heel: $("heel"),
   pitch: $("pitch"),
   field6: $("field6"),
+  cogTest: $("cogTest"),
   compact2: $("compact2"),
   setPin: $("setPin"),
   setRcb: $("setRcb"),
@@ -107,15 +108,16 @@ const CHART_ALPHA = 0.35; // EMA (~5s)
 const KNOTS_PER_MPS = 1.9438444924406048;
 const DAMPING_KEY = "vkl_damping_scale_v1";
 const DAMPING_UI_KEY = "vkl_damping_ui_v1";
-const DAMPING_BOUNDS = { min: 0.6, max: 1.8 };
-const DAMPING_UI_BOUNDS = { min: 0, max: 10 };
+const DAMPING_BOUNDS = { min: 0.2, max: 6.0 };
+const DAMPING_UI_BOUNDS = { min: 0, max: 20 };
+const DAMPING_UI_MID = (DAMPING_UI_BOUNDS.max - DAMPING_UI_BOUNDS.min) / 2.0;
 const DAMPING_UI_DEFAULTS = {
-  heading: 5,
-  cog: 5,
-  sog: 5,
-  heel: 4,
-  pitch: 4,
-  position: 3,
+  heading: 10,
+  cog: 10,
+  sog: 10,
+  heel: 9,
+  pitch: 9,
+  position: 8,
 };
 const DAMPING_PROFILE = {
   heading: { tauMin: 1.2, tauMax: 9.0, noiseRange: 12 },
@@ -143,6 +145,7 @@ let lastHdgEma = null;
 let lastHdgUnwrapped = null;
 let chartDrawPending = false;
 let fixHistory = []; // [{tsMs, lat, lon}]
+let cogFusion = { cogDeg: null, lastHdgDeg: null, lastUpdateTsMs: null };
 let lastDerivedSogKn = null;
 let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
@@ -416,25 +419,35 @@ function fmtDuration(s) {
 
 function sliderToScale(value) {
   if (!Number.isFinite(value)) return 1.0;
-  if (value <= 0) return 0;
-  if (value <= 5) {
-    const norm = value / 5.0;
+  if (value <= DAMPING_UI_BOUNDS.min) return 0;
+  if (value <= DAMPING_UI_MID) {
+    const lowerSpan = DAMPING_UI_MID - DAMPING_UI_BOUNDS.min;
+    const norm = (value - DAMPING_UI_BOUNDS.min) / Math.max(1, lowerSpan);
     return DAMPING_BOUNDS.min + norm * (1.0 - DAMPING_BOUNDS.min);
   }
-  const norm = (value - 5.0) / 5.0;
+  const upperSpan = DAMPING_UI_BOUNDS.max - DAMPING_UI_MID;
+  const norm = (value - DAMPING_UI_MID) / Math.max(1, upperSpan);
   return 1.0 + norm * (DAMPING_BOUNDS.max - 1.0);
 }
 
 function scaleToSlider(scale) {
   if (!Number.isFinite(scale)) return DAMPING_UI_DEFAULTS.heading;
-  if (scale <= 0) return 0;
+  if (scale <= 0) return DAMPING_UI_BOUNDS.min;
   const clamped = clamp(scale, DAMPING_BOUNDS.min, DAMPING_BOUNDS.max);
   if (clamped <= 1.0) {
     const norm = (clamped - DAMPING_BOUNDS.min) / (1.0 - DAMPING_BOUNDS.min);
-    return clamp(norm * 5.0, DAMPING_UI_BOUNDS.min, 5);
+    return clamp(
+      DAMPING_UI_BOUNDS.min + norm * DAMPING_UI_MID,
+      DAMPING_UI_BOUNDS.min,
+      DAMPING_UI_MID,
+    );
   }
   const norm = (clamped - 1.0) / (DAMPING_BOUNDS.max - 1.0);
-  return clamp(5.0 + norm * 5.0, 5, DAMPING_UI_BOUNDS.max);
+  return clamp(
+    DAMPING_UI_MID + norm * (DAMPING_UI_BOUNDS.max - DAMPING_UI_MID),
+    DAMPING_UI_MID,
+    DAMPING_UI_BOUNDS.max,
+  );
 }
 
 function loadDampingUi() {
@@ -487,11 +500,14 @@ function setDampingField(key, value, opts = {}) {
   const clamped = clamp(value, DAMPING_UI_BOUNDS.min, DAMPING_UI_BOUNDS.max);
   const snapped = Math.round(clamped);
   dampingUi[key] = snapped;
-  dampingScaleByKey[key] = sliderToScale(snapped);
+  const scale = sliderToScale(snapped);
+  dampingScaleByKey[key] = scale;
 
   const field = DAMPING_FIELDS[key];
   if (field?.slider) field.slider.value = String(snapped);
-  if (field?.value) field.value.textContent = snapped <= 0 ? "OFF" : String(snapped);
+  if (field?.value) {
+    field.value.textContent = snapped <= 0 ? "OFF" : `${snapped} (${scale.toFixed(2)}x)`;
+  }
 
   if (opts.persist !== false) saveDampingUi();
 }
@@ -826,10 +842,37 @@ function targetPointForId(id) {
 }
 
 function getRawHeadingDeg(state) {
+  const nowTsMs =
+    typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
   const hc = state?.heading_compact_deg;
-  if (typeof hc === "number" && hc >= 0 && hc <= 360) return hc;
+  const hcTs = state?.heading_compact_ts_ms;
+  const compactFresh = typeof hcTs !== "number" || Math.abs(nowTsMs - hcTs) <= 2500;
+  if (typeof hc === "number" && hc >= 0 && hc <= 360 && compactFresh) return hc;
   const hm = state?.heading_deg;
+  const hmTs = state?.heading_main_ts_ms;
+  const mainFresh = typeof hmTs !== "number" || Math.abs(nowTsMs - hmTs) <= 2500;
+  if (typeof hm === "number" && hm >= 0 && hm <= 360 && mainFresh) return hm;
+  // Fallback: si no tenemos timestamps, mantén el comportamiento anterior.
+  if (typeof hc === "number" && hc >= 0 && hc <= 360) return hc;
   if (typeof hm === "number" && hm >= 0 && hm <= 360) return hm;
+  return null;
+}
+
+function getRawHeadingSource(state) {
+  const nowTsMs =
+    typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
+  const hc = state?.heading_compact_deg;
+  const hcTs = state?.heading_compact_ts_ms;
+  const compactFresh = typeof hcTs !== "number" || Math.abs(nowTsMs - hcTs) <= 2500;
+  if (typeof hc === "number" && hc >= 0 && hc <= 360 && compactFresh) return "compact";
+
+  const hm = state?.heading_deg;
+  const hmTs = state?.heading_main_ts_ms;
+  const mainFresh = typeof hmTs !== "number" || Math.abs(nowTsMs - hmTs) <= 2500;
+  if (typeof hm === "number" && hm >= 0 && hm <= 360 && mainFresh) return "main";
+
+  if (typeof hc === "number" && hc >= 0 && hc <= 360) return "compact";
+  if (typeof hm === "number" && hm >= 0 && hm <= 360) return "main";
   return null;
 }
 
@@ -1199,6 +1242,7 @@ function resetPerfSeries() {
   lastHdgEma = null;
   lastHdgUnwrapped = null;
   fixHistory = [];
+  cogFusion = { cogDeg: null, lastHdgDeg: null, lastUpdateTsMs: null };
   lastDerivedSogKn = null;
   compactSogScale = null;
   compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
@@ -1273,6 +1317,73 @@ function decodeSogKnFromCompactField2(field2, refSogKn) {
   return best.v;
 }
 
+function normDeg(deg) {
+  const d = deg % 360.0;
+  return d < 0 ? d + 360.0 : d;
+}
+
+function angleDiffDeg(aDeg, bDeg) {
+  return ((aDeg - bDeg + 540.0) % 360.0) - 180.0;
+}
+
+function blendAngleDeg(aDeg, bDeg, weightB) {
+  if (typeof aDeg !== "number" || typeof bDeg !== "number") return null;
+  const w = clamp(weightB, 0.0, 1.0);
+  const ar = (aDeg * Math.PI) / 180.0;
+  const br = (bDeg * Math.PI) / 180.0;
+  const x = (1.0 - w) * Math.cos(ar) + w * Math.cos(br);
+  const y = (1.0 - w) * Math.sin(ar) + w * Math.sin(br);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return null;
+  return normDeg((Math.atan2(y, x) * 180.0) / Math.PI);
+}
+
+function cogGpsWeightForSog(sogKn) {
+  if (typeof sogKn !== "number" || !Number.isFinite(sogKn)) return 0.5;
+  const sogLow = 1.0;
+  const sogHigh = 3.0;
+  const alphaLow = 0.2;
+  const alphaHigh = 0.8;
+  const t = clamp((sogKn - sogLow) / (sogHigh - sogLow), 0.0, 1.0);
+  return alphaLow + (alphaHigh - alphaLow) * t;
+}
+
+function updateCogFusion({ tsMs, sogKn, hdgDeg, cogGpsDeg }) {
+  const moving = typeof sogKn === "number" && Number.isFinite(sogKn) && sogKn > 0.3;
+  const recentlyUpdated =
+    typeof cogFusion.lastUpdateTsMs === "number" && tsMs - cogFusion.lastUpdateTsMs < 7000;
+
+  let predicted = typeof cogFusion.cogDeg === "number" ? cogFusion.cogDeg : null;
+  if (
+    moving &&
+    typeof predicted === "number" &&
+    typeof hdgDeg === "number" &&
+    typeof cogFusion.lastHdgDeg === "number"
+  ) {
+    predicted = normDeg(predicted + angleDiffDeg(hdgDeg, cogFusion.lastHdgDeg));
+  } else if (moving && typeof predicted !== "number" && typeof hdgDeg === "number") {
+    predicted = normDeg(hdgDeg);
+  }
+
+  if (typeof hdgDeg === "number") cogFusion.lastHdgDeg = normDeg(hdgDeg);
+
+  let fused = predicted;
+  if (typeof cogGpsDeg === "number") {
+    const wGps = cogGpsWeightForSog(sogKn);
+    fused = typeof predicted === "number" ? blendAngleDeg(predicted, cogGpsDeg, wGps) : cogGpsDeg;
+    if (typeof fused === "number") {
+      cogFusion.cogDeg = fused;
+      cogFusion.lastUpdateTsMs = tsMs;
+    }
+    return typeof cogFusion.cogDeg === "number" ? cogFusion.cogDeg : null;
+  }
+
+  if (typeof predicted === "number" && (moving || recentlyUpdated)) {
+    cogFusion.cogDeg = predicted;
+    cogFusion.lastUpdateTsMs = tsMs;
+  }
+  return typeof cogFusion.cogDeg === "number" ? cogFusion.cogDeg : null;
+}
+
 function deriveSogCogInPlace(state) {
   if (typeof state?.latitude !== "number" || typeof state?.longitude !== "number") return;
   const tsMs =
@@ -1282,6 +1393,11 @@ function deriveSogCogInPlace(state) {
   const atlasSogFresh = Number.isFinite(lastField6SogTsMs) && tsMs - lastField6SogTsMs < 2500;
   const hasField6Sog =
     typeof state?.main_field_6 === "number" && Number.isFinite(state.main_field_6);
+  const hdg = getRawHeadingDeg(state);
+  const sogForFusion =
+    typeof state?.sog_knots === "number" && Number.isFinite(state.sog_knots)
+      ? state.sog_knots
+      : lastDerivedSogKn;
 
   // Si no hay nueva posición (solo llegan frames de heading), no dejes SOG/COG congelados.
   const last = fixHistory.length ? fixHistory[fixHistory.length - 1] : null;
@@ -1291,10 +1407,23 @@ function deriveSogCogInPlace(state) {
     last.lon === state.longitude &&
     !backendActive
   ) {
+    const fused = updateCogFusion({ tsMs, sogKn: sogForFusion, hdgDeg: hdg, cogGpsDeg: null });
     const ageMs = tsMs - last.tsMs;
     if (Number.isFinite(ageMs) && ageMs > 2500) {
       if (!hasField6Sog && !atlasSogFresh) state.sog_knots = null;
-      state.cog_deg = null;
+      const moving =
+        typeof sogForFusion === "number" &&
+        Number.isFinite(sogForFusion) &&
+        sogForFusion > 0.3 &&
+        (hasField6Sog || atlasSogFresh);
+      if (!moving) {
+        state.cog_deg = null;
+        cogFusion = { cogDeg: null, lastHdgDeg: null, lastUpdateTsMs: null };
+      } else {
+        state.cog_deg = fused;
+      }
+    } else {
+      state.cog_deg = fused;
     }
     return;
   }
@@ -1303,14 +1432,19 @@ function deriveSogCogInPlace(state) {
   const cutoff = tsMs - 4000;
   while (fixHistory.length > 2 && fixHistory[0].tsMs < cutoff) fixHistory.shift();
 
-  if (fixHistory.length < 2) return;
-  const first = fixHistory[0];
-  const lastFix = fixHistory[fixHistory.length - 1];
-  const dt = Math.max(0.001, (lastFix.tsMs - first.tsMs) / 1000.0);
-  const distM = haversineM(first.lat, first.lon, lastFix.lat, lastFix.lon);
-  const sogKn = (distM / dt) * KNOTS_PER_MPS;
-  if (!Number.isFinite(sogKn) || sogKn <= 0 || sogKn > 40) return;
-  lastDerivedSogKn = sogKn;
+  let cogGps = null;
+  if (fixHistory.length >= 2) {
+    const first = fixHistory[0];
+    const lastFix = fixHistory[fixHistory.length - 1];
+    const dt = Math.max(0.001, (lastFix.tsMs - first.tsMs) / 1000.0);
+    const distM = haversineM(first.lat, first.lon, lastFix.lat, lastFix.lon);
+    const derivedSogKn = (distM / dt) * KNOTS_PER_MPS;
+    if (Number.isFinite(derivedSogKn) && derivedSogKn > 0 && derivedSogKn <= 40) {
+      lastDerivedSogKn = derivedSogKn;
+      // Ignora COG GPS si la distancia es muy pequeA±a (cuantizaciA3n/noise).
+      if (distM >= 1.0) cogGps = bearingDeg(first.lat, first.lon, lastFix.lat, lastFix.lon);
+    }
+  }
 
   // Si Atlas está enviando SOG (vía compact), no lo sobrescribas con el derivado del GPS del móvil.
   if (!hasField6Sog) {
@@ -2211,6 +2345,17 @@ function applyState(state) {
       ? `${fmtNum(state.main_field_6, 2)} m/s (${fmtKn(state.main_field_6 * KNOTS_PER_MPS)})`
       : "—",
   );
+  const cogTest = state.main_cog_test_deg;
+  if (typeof cogTest === "number" && Number.isFinite(cogTest)) {
+    let extra = "";
+    if (typeof state.cog_deg === "number" && Number.isFinite(state.cog_deg)) {
+      const delta = ((cogTest - state.cog_deg + 540.0) % 360.0) - 180.0;
+      extra = ` (${fmtSignedDeg(delta)})`;
+    }
+    setText(els.cogTest, `${fmtDeg(cogTest)}${extra}`);
+  } else {
+    setText(els.cogTest, "—");
+  }
   setText(els.compact2, typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—");
 
   if (typeof rawState.latitude === "number" && typeof rawState.longitude === "number") {
@@ -2279,10 +2424,11 @@ function parseMainPacketInner(dataView) {
   const f4 = getF32(20);
   const f5 = getF32(24);
   const f6 = getF32(28);
+  const cogTest = getF32(32);
   let tailHex = null;
-  if (len >= 35) {
+  if (len >= 36) {
     const tail = [];
-    for (let i = 32; i < 35; i++) tail.push(dataView.getUint8(i));
+    for (let i = 32; i < 36; i++) tail.push(dataView.getUint8(i));
     tailHex = tail.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   const reservedHex = reserved.map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -2296,6 +2442,7 @@ function parseMainPacketInner(dataView) {
     field_4: f4,
     field_5: f5,
     field_6: f6,
+    cog_test_deg: cogTest,
     reserved_hex: reservedHex,
     tail_hex: tailHex,
     raw_len: len,
@@ -2550,6 +2697,7 @@ class AtlasWebBleClient {
       main_field_4: parsed.field_4 ?? null,
       main_field_5: parsed.field_5 ?? null,
       main_field_6: parsed.field_6 ?? null,
+      main_cog_test_deg: parsed.cog_test_deg ?? null,
       main_reserved_hex: parsed.reserved_hex ?? null,
       main_tail_hex: parsed.tail_hex ?? null,
       main_raw_len: parsed.raw_len ?? null,
@@ -3027,6 +3175,7 @@ lastState = {
   main_field_4: null,
   main_field_5: null,
   main_field_6: null,
+  main_cog_test_deg: null,
   main_reserved_hex: null,
   main_tail_hex: null,
   main_raw_len: null,
