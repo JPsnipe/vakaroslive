@@ -4,6 +4,8 @@ import math
 import struct
 from dataclasses import dataclass
 
+from .util_geo import haversine_m
+
 VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73"
 VAKAROS_CHAR_COMMAND_1 = "ac510002-0000-5a11-0076-616b61726f73"
 VAKAROS_CHAR_TELEMETRY_MAIN = "ac510003-0000-5a11-0076-616b61726f73"
@@ -82,3 +84,57 @@ def parse_telemetry_compact(data: bytes) -> TelemetryCompact | None:
         field_2=field_2,
         raw_len=len(data),
     )
+
+
+def extract_start_line_candidates(
+    data: bytes, *, min_len_m: float = 5.0, max_len_m: float = 2000.0
+) -> list[dict[str, float | int]]:
+    """Best-effort extraction of 2 GPS points (4x f32) from an arbitrary packet.
+
+    Atlas2 seems to use little-endian float32 for coordinates; when a payload includes
+    two points close to each other (typical start line), we expose them as candidates.
+    """
+
+    if len(data) < 16:
+        return []
+
+    def ok_lat_lon(lat: float, lon: float) -> bool:
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            return False
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return False
+        # Descarta (0,0) y valores casi nulos (muy improbable en uso real).
+        if abs(lat) < 1e-6 and abs(lon) < 1e-6:
+            return False
+        return True
+
+    out: list[dict[str, float | int]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for off in range(0, len(data) - 16 + 1):
+        try:
+            a_lat, a_lon, b_lat, b_lon = struct.unpack_from("<ffff", data, off)
+        except struct.error:
+            break
+        if not ok_lat_lon(a_lat, a_lon) or not ok_lat_lon(b_lat, b_lon):
+            continue
+        line_len = haversine_m(a_lat, a_lon, b_lat, b_lon)
+        if not (min_len_m <= line_len <= max_len_m):
+            continue
+
+        key = (round(a_lat, 6), round(a_lon, 6), round(b_lat, 6), round(b_lon, 6))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "offset": off,
+                "a_lat": float(a_lat),
+                "a_lon": float(a_lon),
+                "b_lat": float(b_lat),
+                "b_lon": float(b_lon),
+                "line_len_m": float(line_len),
+            }
+        )
+        if len(out) >= 12:
+            break
+    return out

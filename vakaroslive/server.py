@@ -118,12 +118,14 @@ class TelemetryHub:
                 return
             self.state.marks.start_pin = point
             self.state.marks.source = "manual"
+            self.state.marks.start_line_follow_atlas = False
         elif ctype == "set_start_rcb":
             point = point_from_cmd_or_current()
             if not point:
                 return
             self.state.marks.start_rcb = point
             self.state.marks.source = "manual"
+            self.state.marks.start_line_follow_atlas = False
         elif ctype == "clear_start_line":
             self.state.marks.start_pin = None
             self.state.marks.start_rcb = None
@@ -134,8 +136,14 @@ class TelemetryHub:
                 self.state.marks.start_pin = pin
                 self.state.marks.start_rcb = rcb
                 self.state.marks.source = "manual"
+                self.state.marks.start_line_follow_atlas = False
             else:
                 return
+        elif ctype == "set_start_line_follow_atlas":
+            enabled = cmd.get("enabled")
+            if not isinstance(enabled, bool):
+                return
+            self.state.marks.start_line_follow_atlas = enabled
         elif ctype == "set_target":
             target = cmd.get("target")
             allowed = {
@@ -171,7 +179,9 @@ class TelemetryHub:
     async def run(self) -> None:
         while True:
             event = await self._event_queue.get()
-            self.state.apply_event(event)
+            marks_changed = self.state.apply_event(event)
+            if marks_changed:
+                self._save_persisted()
             await self.broadcast_state(event=event)
 
     async def register(self, ws: web.WebSocketResponse) -> None:

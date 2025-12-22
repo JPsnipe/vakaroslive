@@ -34,6 +34,7 @@ const els = {
   setPin: $("setPin"),
   setRcb: $("setRcb"),
   clearStartLine: $("clearStartLine"),
+  toggleStartAuto: $("toggleStartAuto"),
   startSource: $("startSource"),
   pinDist: $("pinDist"),
   pinBrg: $("pinBrg"),
@@ -73,7 +74,7 @@ const els = {
 let lastState = null;
 let wsConn = null;
 let mark = null; // {lat, lon}
-let startLine = { pin: null, rcb: null, source: null };
+let startLine = { pin: null, rcb: null, followAtlas: false, source: null };
 let windward = null; // {lat, lon}
 let leewardPort = null; // {lat, lon}
 let leewardStarboard = null; // {lat, lon}
@@ -724,6 +725,7 @@ function saveLocalMarks(marksObj) {
 function ensureMarksShape(m) {
   const marks = m && typeof m === "object" ? { ...m } : {};
   marks.source = marks.source || "manual";
+  if (!("start_line_follow_atlas" in marks)) marks.start_line_follow_atlas = false;
   if (!("target" in marks)) marks.target = null;
   return marks;
 }
@@ -745,10 +747,12 @@ function applyLocalMarksToUi() {
   }
 
   targetId = marks.target ?? null;
+  const startFollowAtlas = !!marks.start_line_follow_atlas;
   startLine = {
     pin: marks.start_pin ? { lat: marks.start_pin.lat, lon: marks.start_pin.lon } : null,
     rcb: marks.start_rcb ? { lat: marks.start_rcb.lat, lon: marks.start_rcb.lon } : null,
-    source: marks.source || null,
+    followAtlas: startFollowAtlas,
+    source: startFollowAtlas ? "Atlas2 (auto)" : "Manual",
   };
   if (els.targetSelect) {
     const wanted = targetId || "";
@@ -796,8 +800,15 @@ function applyLocalCommand(type, extra = {}) {
     ) {
       localMarks.target = null;
     }
-  } else if (type === "set_start_pin") setKey("start_pin");
-  else if (type === "set_start_rcb") setKey("start_rcb");
+  } else if (type === "set_start_pin") {
+    setKey("start_pin");
+    localMarks.start_line_follow_atlas = false;
+  } else if (type === "set_start_rcb") {
+    setKey("start_rcb");
+    localMarks.start_line_follow_atlas = false;
+  } else if (type === "set_start_line_follow_atlas") {
+    localMarks.start_line_follow_atlas = !!extra.enabled;
+  }
   else if (type === "clear_start_line") {
     localMarks.start_pin = null;
     localMarks.start_rcb = null;
@@ -1669,7 +1680,13 @@ function updateStartLineStats() {
   const pin = startLine?.pin;
   const rcb = startLine?.rcb;
 
-  els.startSource.textContent = startLine?.source ? `Fuente: ${startLine.source}` : "—";
+  const followAtlas = !!startLine?.followAtlas;
+  els.startSource.textContent = `Fuente: ${followAtlas ? "Atlas2" : "Manual"}`;
+  if (els.toggleStartAuto) {
+    const backendActive = !useLocalMarks && wsConn && wsConn.readyState === WebSocket.OPEN;
+    els.toggleStartAuto.disabled = !backendActive;
+    els.toggleStartAuto.textContent = followAtlas ? "Auto Atlas2: ON" : "Auto Atlas2: OFF";
+  }
 
   if (!pin) {
     els.pinDist.textContent = "—";
@@ -1796,10 +1813,12 @@ function applyState(state) {
       ? { lat: marks.leeward_starboard.lat, lon: marks.leeward_starboard.lon }
       : null;
     targetId = marks.target ?? null;
+    const startFollowAtlas = marks.start_line_follow_atlas !== false;
     startLine = {
       pin: marks.start_pin ? { lat: marks.start_pin.lat, lon: marks.start_pin.lon } : null,
       rcb: marks.start_rcb ? { lat: marks.start_rcb.lat, lon: marks.start_rcb.lon } : null,
-      source: marks.source || null,
+      followAtlas: startFollowAtlas,
+      source: startFollowAtlas ? "Atlas2 (auto)" : "Manual",
     };
   }
   if (els.targetSelect) {
@@ -2520,6 +2539,10 @@ els.setRcb?.addEventListener("click", () => {
 
 els.clearStartLine?.addEventListener("click", () => {
   sendCmd("clear_start_line");
+});
+
+els.toggleStartAuto?.addEventListener("click", () => {
+  sendCmd("set_start_line_follow_atlas", { enabled: !startLine?.followAtlas });
 });
 
 els.scan?.addEventListener("click", () => scanDevices());

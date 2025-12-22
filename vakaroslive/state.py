@@ -35,6 +35,7 @@ class RaceMarks:
     mark: GeoPoint | None = None
     start_pin: GeoPoint | None = None
     start_rcb: GeoPoint | None = None
+    start_line_follow_atlas: bool = True
     windward: GeoPoint | None = None
     leeward_port: GeoPoint | None = None
     leeward_starboard: GeoPoint | None = None
@@ -46,6 +47,7 @@ class RaceMarks:
             "mark": self.mark.to_dict() if self.mark else None,
             "start_pin": self.start_pin.to_dict() if self.start_pin else None,
             "start_rcb": self.start_rcb.to_dict() if self.start_rcb else None,
+            "start_line_follow_atlas": bool(self.start_line_follow_atlas),
             "windward": self.windward.to_dict() if self.windward else None,
             "leeward_port": self.leeward_port.to_dict() if self.leeward_port else None,
             "leeward_starboard": self.leeward_starboard.to_dict()
@@ -64,6 +66,8 @@ class RaceMarks:
             marks.start_pin = GeoPoint.from_dict(data["start_pin"])
         if data.get("start_rcb"):
             marks.start_rcb = GeoPoint.from_dict(data["start_rcb"])
+        if "start_line_follow_atlas" in data:
+            marks.start_line_follow_atlas = bool(data.get("start_line_follow_atlas"))
         if data.get("windward"):
             marks.windward = GeoPoint.from_dict(data["windward"])
         if data.get("leeward_port"):
@@ -192,11 +196,120 @@ class AtlasState:
     def to_persisted_json(self) -> str:
         return json.dumps({"marks": self.marks.to_dict()}, ensure_ascii=False, indent=2)
 
-    def apply_event(self, event: dict[str, Any]) -> None:
+    def _apply_atlas_start_line_candidates(self, event: dict[str, Any]) -> bool:
+        if not self.marks.start_line_follow_atlas:
+            return False
+        candidates = event.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return False
+        if not isinstance(self.latitude, (int, float)) or not isinstance(
+            self.longitude, (int, float)
+        ):
+            return False
+
+        boat_lat = float(self.latitude)
+        boat_lon = float(self.longitude)
+        existing_pin = self.marks.start_pin
+        existing_rcb = self.marks.start_rcb
+
+        def parse_candidate(c: Any) -> tuple[float, float, float, float, float] | None:
+            if not isinstance(c, dict):
+                return None
+            try:
+                a_lat = float(c.get("a_lat"))
+                a_lon = float(c.get("a_lon"))
+                b_lat = float(c.get("b_lat"))
+                b_lon = float(c.get("b_lon"))
+            except Exception:
+                return None
+            if not all(math.isfinite(v) for v in (a_lat, a_lon, b_lat, b_lon)):
+                return None
+            line_len = c.get("line_len_m")
+            if isinstance(line_len, (int, float)) and math.isfinite(line_len):
+                line_len_m = float(line_len)
+            else:
+                line_len_m = haversine_m(a_lat, a_lon, b_lat, b_lon)
+            return a_lat, a_lon, b_lat, b_lon, line_len_m
+
+        def assignment_cost(
+            a_lat: float, a_lon: float, b_lat: float, b_lon: float
+        ) -> tuple[float, bool]:
+            """Returns (cost, swapped) to map candidates to (pin, rcb)."""
+            if existing_pin and existing_rcb:
+                cost_direct = haversine_m(existing_pin.lat, existing_pin.lon, a_lat, a_lon) + haversine_m(
+                    existing_rcb.lat, existing_rcb.lon, b_lat, b_lon
+                )
+                cost_swap = haversine_m(existing_pin.lat, existing_pin.lon, b_lat, b_lon) + haversine_m(
+                    existing_rcb.lat, existing_rcb.lon, a_lat, a_lon
+                )
+                if cost_swap < cost_direct:
+                    return cost_swap, True
+                return cost_direct, False
+            if existing_pin:
+                da = haversine_m(existing_pin.lat, existing_pin.lon, a_lat, a_lon)
+                db = haversine_m(existing_pin.lat, existing_pin.lon, b_lat, b_lon)
+                return (db, True) if db < da else (da, False)
+            if existing_rcb:
+                da = haversine_m(existing_rcb.lat, existing_rcb.lon, a_lat, a_lon)
+                db = haversine_m(existing_rcb.lat, existing_rcb.lon, b_lat, b_lon)
+                return (db, True) if db < da else (da, False)
+            return 0.0, False
+
+        best: tuple[float, float, float, float, bool] | None = None
+        best_score: float | None = None
+        for raw_c in candidates:
+            parsed = parse_candidate(raw_c)
+            if not parsed:
+                continue
+            a_lat, a_lon, b_lat, b_lon, line_len_m = parsed
+
+            # Reglas heurísticas: longitud plausible y cerca del barco.
+            if not (5.0 <= line_len_m <= 2500.0):
+                continue
+            dist_a = haversine_m(boat_lat, boat_lon, a_lat, a_lon)
+            dist_b = haversine_m(boat_lat, boat_lon, b_lat, b_lon)
+            if dist_a > 20_000.0 or dist_b > 20_000.0:
+                continue
+
+            match_cost, swapped = assignment_cost(a_lat, a_lon, b_lat, b_lon)
+            score = match_cost if (existing_pin or existing_rcb) else (dist_a + dist_b)
+            if best_score is None or score < best_score:
+                best_score = score
+                best = (a_lat, a_lon, b_lat, b_lon, swapped)
+
+        if best is None:
+            return False
+        a_lat, a_lon, b_lat, b_lon, swapped = best
+        pin_lat, pin_lon, rcb_lat, rcb_lon = (
+            (b_lat, b_lon, a_lat, a_lon) if swapped else (a_lat, a_lon, b_lat, b_lon)
+        )
+
+        ts_ms = int(event.get("ts_ms") or int(time.time() * 1000))
+
+        def differs(prev: GeoPoint | None, lat: float, lon: float) -> bool:
+            if prev is None:
+                return True
+            return haversine_m(prev.lat, prev.lon, lat, lon) > 0.5
+
+        changed = False
+        if differs(self.marks.start_pin, pin_lat, pin_lon):
+            self.marks.start_pin = GeoPoint(lat=pin_lat, lon=pin_lon, ts_ms=ts_ms)
+            changed = True
+        if differs(self.marks.start_rcb, rcb_lat, rcb_lon):
+            self.marks.start_rcb = GeoPoint(lat=rcb_lat, lon=rcb_lon, ts_ms=ts_ms)
+            changed = True
+        if changed:
+            self.marks.source = "atlas"
+        return changed
+
+    def apply_event(self, event: dict[str, Any]) -> bool:
         now_ms = int(time.time() * 1000)
         self.last_event_ts_ms = int(event.get("ts_ms") or now_ms)
 
         etype = event.get("type")
+        if etype == "atlas_start_line_candidates":
+            return self._apply_atlas_start_line_candidates(event)
+
         if etype == "status":
             self.connected = bool(event.get("connected"))
             self.device_address = event.get("device_address")
@@ -210,7 +323,7 @@ class AtlasState:
                 self._last_compact_sog_ts_ms = None
                 self._last_derived_sog_knots = None
                 self._last_field6_sog_ts_ms = None
-            return
+            return False
 
         if etype == "telemetry_compact":
             heading = event.get("heading_deg")
@@ -222,10 +335,10 @@ class AtlasState:
             raw_len = event.get("raw_len")
             if isinstance(raw_len, int):
                 self.compact_raw_len = raw_len
-            return
+            return False
 
         if etype != "telemetry_main":
-            return
+            return False
 
         lat = event.get("latitude")
         lon = event.get("longitude")
@@ -282,3 +395,4 @@ class AtlasState:
             self.main_tail_hex = tail_hex
         if isinstance(raw_len, int):
             self.main_raw_len = raw_len
+        return False

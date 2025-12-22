@@ -15,9 +15,12 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from .atlas2_protocol import (
     DEVICE_NAME_FILTER,
+    VAKAROS_CHAR_COMMAND_1,
+    VAKAROS_CHAR_COMMAND_2,
     VAKAROS_CHAR_TELEMETRY_COMPACT,
     VAKAROS_CHAR_TELEMETRY_MAIN,
     VAKAROS_SERVICE_UUID,
+    extract_start_line_candidates,
     parse_telemetry_compact,
     parse_telemetry_main,
 )
@@ -201,8 +204,24 @@ class Atlas2BleClient:
                             }
                         )
 
+                def maybe_emit_start_line(raw: bytes, source: str) -> None:
+                    candidates = extract_start_line_candidates(raw)
+                    if not candidates:
+                        return
+                    self._emit(
+                        {
+                            "type": "atlas_start_line_candidates",
+                            "ts_ms": int(time.time() * 1000),
+                            "source": source,
+                            "raw_len": len(raw),
+                            "raw_hex": raw.hex(),
+                            "candidates": candidates,
+                        }
+                    )
+
                 def on_main(_: int, data: bytearray) -> None:
                     raw = bytes(data)
+                    maybe_emit_start_line(raw, "telemetry_main_notify")
                     parsed = parse_telemetry_main(raw)
                     if not parsed:
                         return
@@ -219,6 +238,7 @@ class Atlas2BleClient:
 
                 def on_compact(_: int, data: bytearray) -> None:
                     raw = bytes(data)
+                    maybe_emit_start_line(raw, "telemetry_compact_notify")
                     parsed = parse_telemetry_compact(raw)
                     if not parsed:
                         return
@@ -233,8 +253,29 @@ class Atlas2BleClient:
                     if self._loop is not None:
                         self._loop.call_soon_threadsafe(mark_data_received)
 
+                def on_cmd1(_: int, data: bytearray) -> None:
+                    raw = bytes(data)
+                    maybe_emit_start_line(raw, "command_1_notify")
+                    if self._loop is not None:
+                        self._loop.call_soon_threadsafe(mark_data_received)
+
+                def on_cmd2(_: int, data: bytearray) -> None:
+                    raw = bytes(data)
+                    maybe_emit_start_line(raw, "command_2_notify")
+                    if self._loop is not None:
+                        self._loop.call_soon_threadsafe(mark_data_received)
+
                 await client.start_notify(VAKAROS_CHAR_TELEMETRY_MAIN, on_main)
                 await client.start_notify(VAKAROS_CHAR_TELEMETRY_COMPACT, on_compact)
+                for uuid, cb, name in [
+                    (VAKAROS_CHAR_COMMAND_1, on_cmd1, "cmd1"),
+                    (VAKAROS_CHAR_COMMAND_2, on_cmd2, "cmd2"),
+                ]:
+                    try:
+                        await client.start_notify(uuid, cb)
+                        self._logger.info("Notify %s activo.", name)
+                    except Exception as exc:
+                        self._logger.debug("Notify %s no disponible: %s", name, exc)
                 self._logger.info("Notificaciones activas. Escuchando...")
 
                 async def poll_telemetry_loop() -> None:
@@ -243,6 +284,11 @@ class Atlas2BleClient:
                     poll_interval_s = 0.2
                     last_main: bytes | None = None
                     last_compact: bytes | None = None
+                    last_cmd1: bytes | None = None
+                    last_cmd2: bytes | None = None
+                    cmd1_readable = True
+                    cmd2_readable = True
+                    last_cmd_poll = 0.0
 
                     while not self._stop.is_set() and not self._disconnected.is_set():
                         try:
@@ -250,6 +296,7 @@ class Atlas2BleClient:
                                 await client.read_gatt_char(VAKAROS_CHAR_TELEMETRY_MAIN)
                             )
                             if raw_main and raw_main != last_main:
+                                maybe_emit_start_line(raw_main, "telemetry_main_poll")
                                 parsed = parse_telemetry_main(raw_main)
                                 if parsed:
                                     self._emit(
@@ -267,6 +314,7 @@ class Atlas2BleClient:
                                 await client.read_gatt_char(VAKAROS_CHAR_TELEMETRY_COMPACT)
                             )
                             if raw_compact and raw_compact != last_compact:
+                                maybe_emit_start_line(raw_compact, "telemetry_compact_poll")
                                 parsed = parse_telemetry_compact(raw_compact)
                                 if parsed:
                                     self._emit(
@@ -279,6 +327,38 @@ class Atlas2BleClient:
                                     )
                                     mark_data_received()
                                 last_compact = raw_compact
+
+                            now_mono = time.monotonic()
+                            if now_mono - last_cmd_poll >= 1.0:
+                                last_cmd_poll = now_mono
+                                if cmd1_readable:
+                                    try:
+                                        raw_cmd1 = bytes(
+                                            await client.read_gatt_char(VAKAROS_CHAR_COMMAND_1)
+                                        )
+                                        if raw_cmd1 and raw_cmd1 != last_cmd1:
+                                            maybe_emit_start_line(raw_cmd1, "command_1_poll")
+                                            last_cmd1 = raw_cmd1
+                                    except Exception as exc:
+                                        cmd1_readable = False
+                                        self._logger.debug(
+                                            "CMD1 no legible por GATT (se desactiva polling): %s",
+                                            exc,
+                                        )
+                                if cmd2_readable:
+                                    try:
+                                        raw_cmd2 = bytes(
+                                            await client.read_gatt_char(VAKAROS_CHAR_COMMAND_2)
+                                        )
+                                        if raw_cmd2 and raw_cmd2 != last_cmd2:
+                                            maybe_emit_start_line(raw_cmd2, "command_2_poll")
+                                            last_cmd2 = raw_cmd2
+                                    except Exception as exc:
+                                        cmd2_readable = False
+                                        self._logger.debug(
+                                            "CMD2 no legible por GATT (se desactiva polling): %s",
+                                            exc,
+                                        )
                         except Exception as exc:
                             self._logger.debug("Poll read failed: %s", exc)
                             break
