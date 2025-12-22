@@ -165,6 +165,121 @@ function dvToBase64(dv) {
   }
 }
 
+function recClone(value) {
+  try {
+    if (typeof structuredClone === "function") return structuredClone(value);
+  } catch {
+    // ignore
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function recUiSnapshot() {
+  const ui = {};
+  const textKeys = [
+    "status",
+    "navHdg",
+    "navSog",
+    "navCog",
+    "navCogInline",
+    "navDelta",
+    "navSrc",
+    "navLast",
+    "markDist",
+    "markBrg",
+    "heel",
+    "pitch",
+    "field6",
+    "compact2",
+    "startSource",
+    "pinDist",
+    "pinBrg",
+    "rcbDist",
+    "rcbBrg",
+    "lineBrg",
+    "lineLen",
+    "distLine",
+    "etaLine",
+    "targetHint",
+    "targetDist",
+    "targetBrg",
+    "targetCmg",
+    "targetEta",
+    "targetLaylineEta",
+    "bleInfo",
+    "bleDebug",
+  ];
+  for (const k of textKeys) {
+    const el = els[k];
+    ui[k] = el ? el.textContent : null;
+  }
+  const valueKeys = ["courseType", "targetSelect"];
+  for (const k of valueKeys) {
+    const el = els[k];
+    ui[k] = el && typeof el.value === "string" ? el.value : null;
+  }
+  return ui;
+}
+
+function recDebugSnapshot() {
+  let ws = null;
+  try {
+    ws = {
+      wanted: !!wsWanted,
+      ready_state: wsConn ? wsConn.readyState : null,
+      open: !!wsConn && wsConn.readyState === WebSocket.OPEN,
+    };
+  } catch {
+    ws = null;
+  }
+
+  let ble = null;
+  try {
+    ble = bleClient
+      ? {
+          connected: !!bleClient.server?.connected,
+          rx_main: bleClient.rxMainCount || 0,
+          ok_main: bleClient.okMainCount || 0,
+          rx_compact: bleClient.rxCompactCount || 0,
+          ok_compact: bleClient.okCompactCount || 0,
+          last_main_len: bleClient.lastMainLen ?? null,
+          last_main_type: bleClient.lastMainType ?? null,
+          last_main_head_hex: bleClient.lastMainHeadHex ?? null,
+          last_compact_len: bleClient.lastCompactLen ?? null,
+          last_compact_type: bleClient.lastCompactType ?? null,
+          last_compact_head_hex: bleClient.lastCompactHeadHex ?? null,
+        }
+      : null;
+  } catch {
+    ble = null;
+  }
+
+  return {
+    use_local_marks: !!useLocalMarks,
+    course_type: currentCourseType,
+    target_id: targetId,
+    compact_sog_scale: compactSogScale,
+    compact_sog_scale_hits: recClone(compactSogScaleHits),
+    last_derived_sog_knots: lastDerivedSogKn,
+    last_atlas_sog_ts_ms: lastAtlasSogTsMs,
+    ws,
+    ble,
+  };
+}
+
+function recDashboardSnapshot(state) {
+  if (!sessionRec.active) return;
+  recAdd("dashboard", {
+    state: recClone(state),
+    ui: recUiSnapshot(),
+    debug: recDebugSnapshot(),
+  });
+}
+
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
 const VAKAROS_CHAR_TELEMETRY_MAIN = "ac510003-0000-5a11-0076-616b61726f73";
@@ -1616,8 +1731,6 @@ function applyState(state) {
   // En modo BLE directo no recibimos SOG/COG: lo derivamos de lat/lon recientes.
   deriveSogCogInPlace(state);
 
-  recAdd("state", { state });
-
   const connected = !!state.connected;
   const extra = state.last_error ? ` (${shortErr(state.last_error)})` : "";
   setText(
@@ -1721,6 +1834,7 @@ function applyState(state) {
   updateTargetStats();
   pushPerfSample(state);
   updateStartLineStats();
+  recDashboardSnapshot(state);
 }
 
 function applyBlePartialState(partial) {
@@ -1983,11 +2097,13 @@ class AtlasWebBleClient {
     const now = Date.now();
     this.rxMainCount++;
     this.lastMainRxTs = now;
-    recAdd("ble_rx", {
-      chan: "main",
-      raw_b64: dvToBase64(dv),
-      raw_len: dv?.byteLength ?? null,
-    });
+    if (sessionRec.active) {
+      recAdd("ble_rx", {
+        chan: "main",
+        raw_b64: dvToBase64(dv),
+        raw_len: dv?.byteLength ?? null,
+      });
+    }
     try {
       this.lastMainLen = dv?.byteLength ?? null;
       this.lastMainType =
@@ -1998,6 +2114,9 @@ class AtlasWebBleClient {
     }
     const parsed = parseMainPacket(dv);
     if (!parsed) return;
+    if (sessionRec.active) {
+      recAdd("ble_parsed", { chan: "main", parsed });
+    }
     this.okMainCount++;
     this.lastMainOkTs = now;
     this.lastMainTs = now;
@@ -2023,11 +2142,13 @@ class AtlasWebBleClient {
     const now = Date.now();
     this.rxCompactCount++;
     this.lastCompactRxTs = now;
-    recAdd("ble_rx", {
-      chan: "compact",
-      raw_b64: dvToBase64(dv),
-      raw_len: dv?.byteLength ?? null,
-    });
+    if (sessionRec.active) {
+      recAdd("ble_rx", {
+        chan: "compact",
+        raw_b64: dvToBase64(dv),
+        raw_len: dv?.byteLength ?? null,
+      });
+    }
     try {
       this.lastCompactLen = dv?.byteLength ?? null;
       this.lastCompactType =
@@ -2044,6 +2165,16 @@ class AtlasWebBleClient {
     const decodedSog = decodeSogKnFromCompactField2(parsed.field_2 ?? null, lastDerivedSogKn);
     if (typeof decodedSog === "number") {
       lastAtlasSogTsMs = parsed.ts_ms;
+    }
+    if (sessionRec.active) {
+      recAdd("ble_parsed", {
+        chan: "compact",
+        parsed,
+        decoded_sog_knots: typeof decodedSog === "number" ? decodedSog : null,
+        compact_sog_scale: compactSogScale,
+        compact_sog_scale_hits: { ...compactSogScaleHits },
+        last_derived_sog_knots: lastDerivedSogKn,
+      });
     }
     applyBlePartialState({
       connected: true,
@@ -2204,7 +2335,7 @@ function connectWs() {
   wsConn.onmessage = (evt) => {
     try {
       const msg = JSON.parse(evt.data);
-      recAdd("ws_msg", { msg });
+      if (sessionRec.active) recAdd("ws_msg", { msg });
       if (msg.type === "state" && msg.state) applyState(msg.state);
     } catch {
       // ignore
