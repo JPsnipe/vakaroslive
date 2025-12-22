@@ -202,13 +202,15 @@ class Atlas2BleClient:
                         )
 
                 def on_main(_: int, data: bytearray) -> None:
-                    parsed = parse_telemetry_main(bytes(data))
+                    raw = bytes(data)
+                    parsed = parse_telemetry_main(raw)
                     if not parsed:
                         return
                     self._emit(
                         {
                             "type": "telemetry_main",
                             "ts_ms": int(time.time() * 1000),
+                            "raw_hex": raw.hex(),
                             **parsed.__dict__,
                         }
                     )
@@ -216,13 +218,15 @@ class Atlas2BleClient:
                         self._loop.call_soon_threadsafe(mark_data_received)
 
                 def on_compact(_: int, data: bytearray) -> None:
-                    parsed = parse_telemetry_compact(bytes(data))
+                    raw = bytes(data)
+                    parsed = parse_telemetry_compact(raw)
                     if not parsed:
                         return
                     self._emit(
                         {
                             "type": "telemetry_compact",
                             "ts_ms": int(time.time() * 1000),
+                            "raw_hex": raw.hex(),
                             **parsed.__dict__,
                         }
                     )
@@ -252,6 +256,7 @@ class Atlas2BleClient:
                                         {
                                             "type": "telemetry_main",
                                             "ts_ms": int(time.time() * 1000),
+                                            "raw_hex": raw_main.hex(),
                                             **parsed.__dict__,
                                         }
                                     )
@@ -268,6 +273,7 @@ class Atlas2BleClient:
                                         {
                                             "type": "telemetry_compact",
                                             "ts_ms": int(time.time() * 1000),
+                                            "raw_hex": raw_compact.hex(),
                                             **parsed.__dict__,
                                         }
                                     )

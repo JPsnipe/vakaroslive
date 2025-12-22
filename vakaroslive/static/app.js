@@ -13,6 +13,7 @@ const els = {
   navHdg: $("navHdg"),
   navSog: $("navSog"),
   navCog: $("navCog"),
+  navCogInline: $("navCogInline"),
   navDelta: $("navDelta"),
   navSrc: $("navSrc"),
   navLast: $("navLast"),
@@ -62,6 +63,8 @@ const els = {
   bleDisconnect: $("bleDisconnect"),
   bleInfo: $("bleInfo"),
   bleDebug: $("bleDebug"),
+  recToggle: $("recToggle"),
+  recDownload: $("recDownload"),
   scan: $("scan"),
   scanInfo: $("scanInfo"),
   deviceList: $("deviceList"),
@@ -100,6 +103,67 @@ let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
 let lastAtlasSogTsMs = 0;
 let bleInfoBaseText = null;
+
+// Grabación de sesión (raw + parseado) para depurar el protocolo.
+let sessionRec = {
+  active: false,
+  startedTsMs: null,
+  stoppedTsMs: null,
+  entries: [],
+  maxEntries: 20000,
+};
+
+function recSetActive(active) {
+  sessionRec.active = !!active;
+  if (sessionRec.active) {
+    sessionRec.startedTsMs = Date.now();
+    sessionRec.stoppedTsMs = null;
+    sessionRec.entries = [];
+  } else {
+    sessionRec.stoppedTsMs = Date.now();
+  }
+  if (els.recToggle) els.recToggle.textContent = sessionRec.active ? "Parar" : "Grabar";
+  if (els.recDownload) els.recDownload.disabled = sessionRec.active || !sessionRec.entries.length;
+}
+
+function recAdd(kind, payload) {
+  if (!sessionRec.active) return;
+  try {
+    sessionRec.entries.push({ ts_ms: Date.now(), kind, ...(payload || {}) });
+    if (sessionRec.entries.length > sessionRec.maxEntries) sessionRec.entries.shift();
+    if (els.recDownload) els.recDownload.disabled = sessionRec.active || !sessionRec.entries.length;
+  } catch {
+    // ignore
+  }
+}
+
+function downloadJson(filename, obj) {
+  const text = JSON.stringify(obj, null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function dvToBase64(dv) {
+  try {
+    if (!dv || typeof dv.byteLength !== "number") return null;
+    const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < u8.length; i += chunk) {
+      bin += String.fromCharCode(...u8.subarray(i, i + chunk));
+    }
+    return btoa(bin);
+  } catch {
+    return null;
+  }
+}
 
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
@@ -1552,6 +1616,8 @@ function applyState(state) {
   // En modo BLE directo no recibimos SOG/COG: lo derivamos de lat/lon recientes.
   deriveSogCogInPlace(state);
 
+  recAdd("state", { state });
+
   const connected = !!state.connected;
   const extra = state.last_error ? ` (${shortErr(state.last_error)})` : "";
   setText(
@@ -1573,6 +1639,7 @@ function applyState(state) {
   setText(els.navHdg, fmtDeg(hdgMag));
   setText(els.navSog, fmtKn(state.sog_knots));
   setText(els.navCog, fmtDeg(state.cog_deg));
+  setText(els.navCogInline, fmtDeg(state.cog_deg));
 
   let src = "—";
   const hc = state.heading_compact_deg;
@@ -1620,7 +1687,12 @@ function applyState(state) {
   // Atlas: en la práctica estos dos campos vienen invertidos (heel/pitch).
   setText(els.heel, typeof state.main_field_5 === "number" ? fmtDeg(state.main_field_5) : "-");
   setText(els.pitch, typeof state.main_field_4 === "number" ? fmtDeg(state.main_field_4) : "-");
-  setText(els.field6, typeof state.main_field_6 === "number" ? fmtNum(state.main_field_6, 3) : "—");
+  setText(
+    els.field6,
+    typeof state.main_field_6 === "number"
+      ? `${fmtNum(state.main_field_6, 2)} m/s (${fmtKn(state.main_field_6 * KNOTS_PER_MPS)})`
+      : "—",
+  );
   setText(els.compact2, typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—");
 
   if (typeof state.latitude === "number" && typeof state.longitude === "number") {
@@ -1911,6 +1983,11 @@ class AtlasWebBleClient {
     const now = Date.now();
     this.rxMainCount++;
     this.lastMainRxTs = now;
+    recAdd("ble_rx", {
+      chan: "main",
+      raw_b64: dvToBase64(dv),
+      raw_len: dv?.byteLength ?? null,
+    });
     try {
       this.lastMainLen = dv?.byteLength ?? null;
       this.lastMainType =
@@ -1946,6 +2023,11 @@ class AtlasWebBleClient {
     const now = Date.now();
     this.rxCompactCount++;
     this.lastCompactRxTs = now;
+    recAdd("ble_rx", {
+      chan: "compact",
+      raw_b64: dvToBase64(dv),
+      raw_len: dv?.byteLength ?? null,
+    });
     try {
       this.lastCompactLen = dv?.byteLength ?? null;
       this.lastCompactType =
@@ -2122,6 +2204,7 @@ function connectWs() {
   wsConn.onmessage = (evt) => {
     try {
       const msg = JSON.parse(evt.data);
+      recAdd("ws_msg", { msg });
       if (msg.type === "state" && msg.state) applyState(msg.state);
     } catch {
       // ignore
@@ -2322,6 +2405,29 @@ els.bleDisconnect?.addEventListener("click", () => {
   }
 });
 
+els.recToggle?.addEventListener("click", () => {
+  recSetActive(!sessionRec.active);
+});
+
+els.recDownload?.addEventListener("click", () => {
+  try {
+    const started = sessionRec.startedTsMs || Date.now();
+    const stamp = new Date(started).toISOString().replaceAll(":", "-");
+    downloadJson(`vakaroslive_session_${stamp}.json`, {
+      meta: {
+        appVersion: APP_VERSION,
+        started_ts_ms: sessionRec.startedTsMs,
+        stopped_ts_ms: sessionRec.stoppedTsMs,
+        ua: navigator?.userAgent || null,
+        href: location?.href || null,
+      },
+      entries: sessionRec.entries,
+    });
+  } catch {
+    // ignore
+  }
+});
+
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { });
 }
@@ -2333,6 +2439,7 @@ if (document?.title?.startsWith("VakarosLive")) {
 
 initCardCollapsing();
 initMap();
+recSetActive(false);
 setBleUi(false, "—");
 refreshBleDebugLine();
 setInterval(() => {
