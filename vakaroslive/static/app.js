@@ -5,7 +5,7 @@ function setText(el, value) {
   el.textContent = value;
 }
 
-const APP_VERSION = "v24";
+const APP_VERSION = "v25";
 
 const els = {
   status: $("status"),
@@ -101,7 +101,6 @@ let fixHistory = []; // [{tsMs, lat, lon}]
 let lastDerivedSogKn = null;
 let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
-let lastAtlasSogTsMs = 0;
 let lastField6SogTsMs = 0;
 let bleInfoBaseText = null;
 
@@ -266,7 +265,7 @@ function recDebugSnapshot() {
     compact_sog_scale: compactSogScale,
     compact_sog_scale_hits: recClone(compactSogScaleHits),
     last_derived_sog_knots: lastDerivedSogKn,
-    last_atlas_sog_ts_ms: lastAtlasSogTsMs,
+    last_field6_sog_ts_ms: lastField6SogTsMs,
     ws,
     ble,
   };
@@ -827,7 +826,6 @@ function resetPerfSeries() {
   lastDerivedSogKn = null;
   compactSogScale = null;
   compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
-  lastAtlasSogTsMs = 0;
   lastField6SogTsMs = 0;
   scheduleChartDraw();
 }
@@ -905,7 +903,9 @@ function deriveSogCogInPlace(state) {
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
 
   const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
-  const atlasSogFresh = Number.isFinite(lastAtlasSogTsMs) && tsMs - lastAtlasSogTsMs < 2500;
+  const atlasSogFresh = Number.isFinite(lastField6SogTsMs) && tsMs - lastField6SogTsMs < 2500;
+  const hasField6Sog =
+    typeof state?.main_field_6 === "number" && Number.isFinite(state.main_field_6);
 
   // Si no hay nueva posición (solo llegan frames de heading), no dejes SOG/COG congelados.
   const last = fixHistory.length ? fixHistory[fixHistory.length - 1] : null;
@@ -917,7 +917,7 @@ function deriveSogCogInPlace(state) {
   ) {
     const ageMs = tsMs - last.tsMs;
     if (Number.isFinite(ageMs) && ageMs > 2500) {
-      if (!atlasSogFresh) state.sog_knots = null;
+      if (!hasField6Sog && !atlasSogFresh) state.sog_knots = null;
       state.cog_deg = null;
     }
     return;
@@ -937,10 +937,12 @@ function deriveSogCogInPlace(state) {
   lastDerivedSogKn = sogKn;
 
   // Si Atlas está enviando SOG (vía compact), no lo sobrescribas con el derivado del GPS del móvil.
-  if (!backendActive && !atlasSogFresh) {
-    state.sog_knots = sogKn;
-  } else if (backendActive && typeof state.sog_knots !== "number") {
-    state.sog_knots = sogKn;
+  if (!hasField6Sog) {
+    if (!backendActive && !atlasSogFresh) {
+      state.sog_knots = sogKn;
+    } else if (backendActive && typeof state.sog_knots !== "number") {
+      state.sog_knots = sogKn;
+    }
   }
 
   if (!backendActive || typeof state.cog_deg !== "number") {
@@ -1730,6 +1732,14 @@ function updateStartLineStats() {
 function applyState(state) {
   lastState = state;
 
+  // Atlas: Field 6 parece ser SOG en m/s (mejor que compact/derivado). Normaliza a nudos.
+  if (typeof state?.main_field_6 === "number" && Number.isFinite(state.main_field_6)) {
+    const kn = state.main_field_6 * KNOTS_PER_MPS;
+    if (Number.isFinite(kn) && kn >= 0 && kn <= 60) {
+      state.sog_knots = kn;
+    }
+  }
+
   // En modo BLE directo no recibimos SOG/COG: lo derivamos de lat/lon recientes.
   deriveSogCogInPlace(state);
 
@@ -2130,7 +2140,6 @@ class AtlasWebBleClient {
       sogField6Kn <= 60;
     if (useField6Sog) {
       lastField6SogTsMs = parsed.ts_ms;
-      lastAtlasSogTsMs = parsed.ts_ms;
     }
 
     this.okMainCount++;
@@ -2180,10 +2189,6 @@ class AtlasWebBleClient {
     this.lastCompactOkTs = now;
     this.lastCompactTs = now;
     const decodedSog = decodeSogKnFromCompactField2(parsed.field_2 ?? null, lastDerivedSogKn);
-    const field6Fresh =
-      Number.isFinite(lastField6SogTsMs) && parsed.ts_ms - lastField6SogTsMs <= 2500;
-    const useCompactSog = typeof decodedSog === "number" && !field6Fresh;
-    if (useCompactSog) lastAtlasSogTsMs = parsed.ts_ms;
     if (sessionRec.active) {
       recAdd("ble_parsed", {
         chan: "compact",
@@ -2200,7 +2205,6 @@ class AtlasWebBleClient {
       last_event_ts_ms: parsed.ts_ms,
       last_error: null,
       heading_compact_deg: parsed.heading_deg ?? null,
-      sog_knots: useCompactSog ? decodedSog : (lastState?.sog_knots ?? null),
       compact_field_2: parsed.field_2 ?? null,
       compact_raw_len: parsed.raw_len ?? null,
     });

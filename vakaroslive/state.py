@@ -219,15 +219,6 @@ class AtlasState:
             field_2 = event.get("field_2")
             if isinstance(field_2, int):
                 self.compact_field_2 = field_2
-                decoded_sog = self._decode_sog_knots_from_compact_field2(field_2)
-                if decoded_sog is not None:
-                    self._last_compact_sog_ts_ms = int(self.last_event_ts_ms)
-                    field6_fresh = (
-                        self._last_field6_sog_ts_ms is not None
-                        and int(self.last_event_ts_ms) - int(self._last_field6_sog_ts_ms) <= 2500
-                    )
-                    if not field6_fresh or self.sog_knots is None:
-                        self.sog_knots = decoded_sog
             raw_len = event.get("raw_len")
             if isinstance(raw_len, int):
                 self.compact_raw_len = raw_len
