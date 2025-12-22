@@ -102,6 +102,7 @@ let lastDerivedSogKn = null;
 let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
 let lastAtlasSogTsMs = 0;
+let lastField6SogTsMs = 0;
 let bleInfoBaseText = null;
 
 // Grabación de sesión (raw + parseado) para depurar el protocolo.
@@ -827,6 +828,7 @@ function resetPerfSeries() {
   compactSogScale = null;
   compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
   lastAtlasSogTsMs = 0;
+  lastField6SogTsMs = 0;
   scheduleChartDraw();
 }
 
@@ -903,7 +905,7 @@ function deriveSogCogInPlace(state) {
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
 
   const backendActive = wsWanted && wsConn && wsConn.readyState === WebSocket.OPEN;
-  const atlasSogFresh = Number.isFinite(lastAtlasSogTsMs) && tsMs - lastAtlasSogTsMs < 2200;
+  const atlasSogFresh = Number.isFinite(lastAtlasSogTsMs) && tsMs - lastAtlasSogTsMs < 2500;
 
   // Si no hay nueva posición (solo llegan frames de heading), no dejes SOG/COG congelados.
   const last = fixHistory.length ? fixHistory[fixHistory.length - 1] : null;
@@ -2117,6 +2119,20 @@ class AtlasWebBleClient {
     if (sessionRec.active) {
       recAdd("ble_parsed", { chan: "main", parsed });
     }
+
+    const sogField6Mps = parsed.field_6;
+    const sogField6Kn =
+      typeof sogField6Mps === "number" && Number.isFinite(sogField6Mps) ? sogField6Mps * KNOTS_PER_MPS : null;
+    const useField6Sog =
+      typeof sogField6Kn === "number" &&
+      Number.isFinite(sogField6Kn) &&
+      sogField6Kn >= 0 &&
+      sogField6Kn <= 60;
+    if (useField6Sog) {
+      lastField6SogTsMs = parsed.ts_ms;
+      lastAtlasSogTsMs = parsed.ts_ms;
+    }
+
     this.okMainCount++;
     this.lastMainOkTs = now;
     this.lastMainTs = now;
@@ -2125,6 +2141,7 @@ class AtlasWebBleClient {
       device_address: this.device?.name || "Atlas",
       last_event_ts_ms: parsed.ts_ms,
       last_error: null,
+      sog_knots: useField6Sog ? sogField6Kn : (lastState?.sog_knots ?? null),
       latitude: parsed.latitude ?? lastState?.latitude ?? null,
       longitude: parsed.longitude ?? lastState?.longitude ?? null,
       heading_deg: parsed.heading_deg ?? lastState?.heading_deg ?? null,
@@ -2163,9 +2180,10 @@ class AtlasWebBleClient {
     this.lastCompactOkTs = now;
     this.lastCompactTs = now;
     const decodedSog = decodeSogKnFromCompactField2(parsed.field_2 ?? null, lastDerivedSogKn);
-    if (typeof decodedSog === "number") {
-      lastAtlasSogTsMs = parsed.ts_ms;
-    }
+    const field6Fresh =
+      Number.isFinite(lastField6SogTsMs) && parsed.ts_ms - lastField6SogTsMs <= 2500;
+    const useCompactSog = typeof decodedSog === "number" && !field6Fresh;
+    if (useCompactSog) lastAtlasSogTsMs = parsed.ts_ms;
     if (sessionRec.active) {
       recAdd("ble_parsed", {
         chan: "compact",
@@ -2182,7 +2200,7 @@ class AtlasWebBleClient {
       last_event_ts_ms: parsed.ts_ms,
       last_error: null,
       heading_compact_deg: parsed.heading_deg ?? null,
-      sog_knots: typeof decodedSog === "number" ? decodedSog : (lastState?.sog_knots ?? null),
+      sog_knots: useCompactSog ? decodedSog : (lastState?.sog_knots ?? null),
       compact_field_2: parsed.field_2 ?? null,
       compact_raw_len: parsed.raw_len ?? null,
     });

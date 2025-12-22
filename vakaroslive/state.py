@@ -111,6 +111,7 @@ class AtlasState:
     )
     _last_compact_sog_ts_ms: int | None = field(default=None, repr=False)
     _last_derived_sog_knots: float | None = field(default=None, repr=False)
+    _last_field6_sog_ts_ms: int | None = field(default=None, repr=False)
     marks: RaceMarks = field(default_factory=RaceMarks)
 
     def to_dict(self) -> dict[str, Any]:
@@ -208,6 +209,7 @@ class AtlasState:
                 self._compact_sog_scale_hits = {100: 0, 10: 0, 1: 0}
                 self._last_compact_sog_ts_ms = None
                 self._last_derived_sog_knots = None
+                self._last_field6_sog_ts_ms = None
             return
 
         if etype == "telemetry_compact":
@@ -219,8 +221,13 @@ class AtlasState:
                 self.compact_field_2 = field_2
                 decoded_sog = self._decode_sog_knots_from_compact_field2(field_2)
                 if decoded_sog is not None:
-                    self.sog_knots = decoded_sog
                     self._last_compact_sog_ts_ms = int(self.last_event_ts_ms)
+                    field6_fresh = (
+                        self._last_field6_sog_ts_ms is not None
+                        and int(self.last_event_ts_ms) - int(self._last_field6_sog_ts_ms) <= 2500
+                    )
+                    if not field6_fresh or self.sog_knots is None:
+                        self.sog_knots = decoded_sog
             raw_len = event.get("raw_len")
             if isinstance(raw_len, int):
                 self.compact_raw_len = raw_len
@@ -271,8 +278,13 @@ class AtlasState:
             self.main_field_4 = float(field_4)
         if isinstance(field_5, (int, float)):
             self.main_field_5 = float(field_5)
-        if isinstance(field_6, (int, float)):
+        if isinstance(field_6, (int, float)) and math.isfinite(field_6):
             self.main_field_6 = float(field_6)
+            # Field 6 parece ser SOG en m/s: exponer como nudos para el dashboard.
+            sog_kn = float(field_6) * MPS_TO_KNOTS
+            if 0.0 <= sog_kn <= 60.0:
+                self.sog_knots = sog_kn
+                self._last_field6_sog_ts_ms = int(self.last_event_ts_ms)
         if isinstance(reserved_hex, str):
             self.main_reserved_hex = reserved_hex
         if isinstance(tail_hex, str) or tail_hex is None:
