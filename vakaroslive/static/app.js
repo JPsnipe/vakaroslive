@@ -351,7 +351,9 @@ function recDashboardSnapshot(state) {
 
 // BLE directo (Web Bluetooth)
 const VAKAROS_SERVICE_UUID = "ac510001-0000-5a11-0076-616b61726f73";
+const VAKAROS_CHAR_COMMAND_1 = "ac510002-0000-5a11-0076-616b61726f73";
 const VAKAROS_CHAR_TELEMETRY_MAIN = "ac510003-0000-5a11-0076-616b61726f73";
+const VAKAROS_CHAR_COMMAND_2 = "ac510004-0000-5a11-0076-616b61726f73";
 const VAKAROS_CHAR_TELEMETRY_COMPACT = "ac510005-0000-5a11-0076-616b61726f73";
 const LOCAL_MARKS_KEY = "vkl_marks_v1";
 let bleClient = null;
@@ -844,16 +846,10 @@ function targetPointForId(id) {
 function getRawHeadingDeg(state) {
   const nowTsMs =
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
-  const hc = state?.heading_compact_deg;
-  const hcTs = state?.heading_compact_ts_ms;
-  const compactFresh = typeof hcTs !== "number" || Math.abs(nowTsMs - hcTs) <= 2500;
-  if (typeof hc === "number" && hc >= 0 && hc <= 360 && compactFresh) return hc;
   const hm = state?.heading_deg;
   const hmTs = state?.heading_main_ts_ms;
   const mainFresh = typeof hmTs !== "number" || Math.abs(nowTsMs - hmTs) <= 2500;
   if (typeof hm === "number" && hm >= 0 && hm <= 360 && mainFresh) return hm;
-  // Fallback: si no tenemos timestamps, mantén el comportamiento anterior.
-  if (typeof hc === "number" && hc >= 0 && hc <= 360) return hc;
   if (typeof hm === "number" && hm >= 0 && hm <= 360) return hm;
   return null;
 }
@@ -861,17 +857,11 @@ function getRawHeadingDeg(state) {
 function getRawHeadingSource(state) {
   const nowTsMs =
     typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
-  const hc = state?.heading_compact_deg;
-  const hcTs = state?.heading_compact_ts_ms;
-  const compactFresh = typeof hcTs !== "number" || Math.abs(nowTsMs - hcTs) <= 2500;
-  if (typeof hc === "number" && hc >= 0 && hc <= 360 && compactFresh) return "compact";
-
   const hm = state?.heading_deg;
   const hmTs = state?.heading_main_ts_ms;
   const mainFresh = typeof hmTs !== "number" || Math.abs(nowTsMs - hmTs) <= 2500;
   if (typeof hm === "number" && hm >= 0 && hm <= 360 && mainFresh) return "main";
 
-  if (typeof hc === "number" && hc >= 0 && hc <= 360) return "compact";
   if (typeof hm === "number" && hm >= 0 && hm <= 360) return "main";
   return null;
 }
@@ -1115,6 +1105,180 @@ function ensureMarksShape(m) {
   if (!("start_line_follow_atlas" in marks)) marks.start_line_follow_atlas = false;
   if (!("target" in marks)) marks.target = null;
   return marks;
+}
+
+function extractStartLineCandidates(dataView, opts = {}) {
+  if (!dataView || typeof dataView.byteLength !== "number") return [];
+  const len = dataView.byteLength;
+  if (len < 16) return [];
+
+  const minLen = Number.isFinite(opts.minLenM) ? opts.minLenM : 5.0;
+  const maxLen = Number.isFinite(opts.maxLenM) ? opts.maxLenM : 2000.0;
+
+  const okLatLon = (lat, lon) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
+    if (Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6) return false;
+    return true;
+  };
+
+  const out = [];
+  const seen = new Set();
+  for (let off = 0; off <= len - 16; off++) {
+    let aLat;
+    let aLon;
+    let bLat;
+    let bLon;
+    try {
+      aLat = dataView.getFloat32(off, true);
+      aLon = dataView.getFloat32(off + 4, true);
+      bLat = dataView.getFloat32(off + 8, true);
+      bLon = dataView.getFloat32(off + 12, true);
+    } catch {
+      break;
+    }
+    if (!okLatLon(aLat, aLon) || !okLatLon(bLat, bLon)) continue;
+    const lineLen = haversineM(aLat, aLon, bLat, bLon);
+    if (!(lineLen >= minLen && lineLen <= maxLen)) continue;
+    const key = `${Math.round(aLat * 1e6)}|${Math.round(aLon * 1e6)}|${Math.round(bLat * 1e6)}|${Math.round(bLon * 1e6)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      offset: off,
+      a_lat: aLat,
+      a_lon: aLon,
+      b_lat: bLat,
+      b_lon: bLon,
+      line_len_m: lineLen,
+    });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+function applyLocalStartLineCandidates(candidates, source, opts = {}) {
+  if (!useLocalMarks) return false;
+  localMarks = ensureMarksShape(localMarks || loadLocalMarks() || {});
+  const fromCommand = typeof source === "string" && source.startsWith("command_");
+  if (!localMarks.start_line_follow_atlas && !fromCommand) return false;
+  if (!Array.isArray(candidates) || candidates.length === 0) return false;
+
+  const boatLat = Number.isFinite(opts.boatLat)
+    ? opts.boatLat
+    : Number.isFinite(lastState?.latitude)
+      ? lastState.latitude
+      : null;
+  const boatLon = Number.isFinite(opts.boatLon)
+    ? opts.boatLon
+    : Number.isFinite(lastState?.longitude)
+      ? lastState.longitude
+      : null;
+  if (!Number.isFinite(boatLat) || !Number.isFinite(boatLon)) return false;
+
+  const existingPin = localMarks.start_pin
+    ? { lat: localMarks.start_pin.lat, lon: localMarks.start_pin.lon }
+    : null;
+  const existingRcb = localMarks.start_rcb
+    ? { lat: localMarks.start_rcb.lat, lon: localMarks.start_rcb.lon }
+    : null;
+
+  const parseCandidate = (c) => {
+    if (!c || typeof c !== "object") return null;
+    const aLat = Number(c.a_lat);
+    const aLon = Number(c.a_lon);
+    const bLat = Number(c.b_lat);
+    const bLon = Number(c.b_lon);
+    if (!Number.isFinite(aLat) || !Number.isFinite(aLon) || !Number.isFinite(bLat) || !Number.isFinite(bLon)) {
+      return null;
+    }
+    const lineLen = Number.isFinite(c.line_len_m)
+      ? Number(c.line_len_m)
+      : haversineM(aLat, aLon, bLat, bLon);
+    return { aLat, aLon, bLat, bLon, lineLen };
+  };
+
+  const assignmentCost = (aLat, aLon, bLat, bLon) => {
+    if (existingPin && existingRcb) {
+      const costDirect =
+        haversineM(existingPin.lat, existingPin.lon, aLat, aLon) +
+        haversineM(existingRcb.lat, existingRcb.lon, bLat, bLon);
+      const costSwap =
+        haversineM(existingPin.lat, existingPin.lon, bLat, bLon) +
+        haversineM(existingRcb.lat, existingRcb.lon, aLat, aLon);
+      if (costSwap < costDirect) return { cost: costSwap, swapped: true };
+      return { cost: costDirect, swapped: false };
+    }
+    if (existingPin) {
+      const da = haversineM(existingPin.lat, existingPin.lon, aLat, aLon);
+      const db = haversineM(existingPin.lat, existingPin.lon, bLat, bLon);
+      return db < da ? { cost: db, swapped: true } : { cost: da, swapped: false };
+    }
+    if (existingRcb) {
+      const da = haversineM(existingRcb.lat, existingRcb.lon, aLat, aLon);
+      const db = haversineM(existingRcb.lat, existingRcb.lon, bLat, bLon);
+      return db < da ? { cost: db, swapped: true } : { cost: da, swapped: false };
+    }
+    return { cost: 0.0, swapped: false };
+  };
+
+  let best = null;
+  let bestScore = null;
+  for (const raw of candidates) {
+    const parsed = parseCandidate(raw);
+    if (!parsed) continue;
+    const { aLat, aLon, bLat, bLon, lineLen } = parsed;
+    if (lineLen < 5.0 || lineLen > 2500.0) continue;
+    const distA = haversineM(boatLat, boatLon, aLat, aLon);
+    const distB = haversineM(boatLat, boatLon, bLat, bLon);
+    if (distA > 20000.0 || distB > 20000.0) continue;
+
+    const { cost, swapped } = assignmentCost(aLat, aLon, bLat, bLon);
+    const score = existingPin || existingRcb ? cost : distA + distB;
+    if (bestScore === null || score < bestScore) {
+      bestScore = score;
+      best = { aLat, aLon, bLat, bLon, swapped };
+    }
+  }
+
+  if (!best) return false;
+  const pinLat = best.swapped ? best.bLat : best.aLat;
+  const pinLon = best.swapped ? best.bLon : best.aLon;
+  const rcbLat = best.swapped ? best.aLat : best.bLat;
+  const rcbLon = best.swapped ? best.aLon : best.bLon;
+  const tsMs = Number.isFinite(opts.tsMs) ? opts.tsMs : Date.now();
+
+  const differs = (prev, lat, lon) => {
+    if (!prev || !Number.isFinite(prev.lat) || !Number.isFinite(prev.lon)) return true;
+    return haversineM(prev.lat, prev.lon, lat, lon) > 0.5;
+  };
+
+  let changed = false;
+  if (differs(localMarks.start_pin, pinLat, pinLon)) {
+    localMarks.start_pin = { lat: pinLat, lon: pinLon, ts_ms: tsMs };
+    changed = true;
+  }
+  if (differs(localMarks.start_rcb, rcbLat, rcbLon)) {
+    localMarks.start_rcb = { lat: rcbLat, lon: rcbLon, ts_ms: tsMs };
+    changed = true;
+  }
+  if (!changed) return false;
+
+  localMarks.source = "atlas";
+  saveLocalMarks(localMarks);
+  applyLocalMarksToUi();
+  return true;
+}
+
+function maybeAutoStartLineFromBle(dataView, source, opts = {}) {
+  if (!useLocalMarks) return;
+  localMarks = ensureMarksShape(localMarks || loadLocalMarks() || {});
+  const fromCommand = typeof source === "string" && source.startsWith("command_");
+  if (!localMarks.start_line_follow_atlas && !fromCommand) return;
+
+  const candidates = extractStartLineCandidates(dataView);
+  if (!candidates.length) return;
+
+  applyLocalStartLineCandidates(candidates, source, opts);
 }
 
 function applyLocalMarksToUi() {
@@ -1448,16 +1612,22 @@ function deriveSogCogInPlace(state) {
 
   // Si Atlas está enviando SOG (vía compact), no lo sobrescribas con el derivado del GPS del móvil.
   if (!hasField6Sog) {
-    if (!backendActive && !atlasSogFresh) {
-      state.sog_knots = sogKn;
-    } else if (backendActive && typeof state.sog_knots !== "number") {
-      state.sog_knots = sogKn;
+    const derived = lastDerivedSogKn;
+    if (typeof derived === "number" && Number.isFinite(derived)) {
+      if (!backendActive && !atlasSogFresh) {
+        state.sog_knots = derived;
+      } else if (backendActive && typeof state.sog_knots !== "number") {
+        state.sog_knots = derived;
+      }
     }
   }
 
-  if (!backendActive || typeof state.cog_deg !== "number") {
-    state.cog_deg = bearingDeg(first.lat, first.lon, lastFix.lat, lastFix.lon);
-  }
+  const sogFusionNow =
+    typeof state?.sog_knots === "number" && Number.isFinite(state.sog_knots)
+      ? state.sog_knots
+      : lastDerivedSogKn;
+  const fused = updateCogFusion({ tsMs, sogKn: sogFusionNow, hdgDeg: hdg, cogGpsDeg: cogGps });
+  if (!backendActive || typeof state.cog_deg !== "number") state.cog_deg = fused;
 }
 
 function pushPerfSample(state) {
@@ -2183,7 +2353,8 @@ function updateStartLineStats() {
   els.startSource.textContent = `Fuente: ${followAtlas ? "Atlas2" : "Manual"}`;
   if (els.toggleStartAuto) {
     const backendActive = !useLocalMarks && wsConn && wsConn.readyState === WebSocket.OPEN;
-    els.toggleStartAuto.disabled = !backendActive;
+    const bleActive = useLocalMarks && !!bleClient && !!bleClient.server?.connected;
+    els.toggleStartAuto.disabled = !(backendActive || bleActive);
     els.toggleStartAuto.textContent = followAtlas ? "Auto Atlas2: ON" : "Auto Atlas2: OFF";
   }
 
@@ -2286,10 +2457,8 @@ function applyState(state) {
   setText(els.navCogInline, fmtDeg(state.cog_deg));
 
   let src = "—";
-  const hc = state.heading_compact_deg;
-  const hm = state.heading_deg;
-  if (typeof hc === "number" && hc >= 0 && hc <= 360) src = "HDG: compact";
-  else if (typeof hm === "number" && hm >= 0 && hm <= 360) src = "HDG: main";
+  const hs = getRawHeadingSource(state);
+  if (hs === "main") src = "HDG: main";
   setText(els.navSrc, src);
 
   if (typeof hdgMag === "number" && typeof state.cog_deg === "number") {
@@ -2508,10 +2677,13 @@ class AtlasWebBleClient {
     this.server = null;
     this.mainChar = null;
     this.compactChar = null;
+    this.cmd1Char = null;
+    this.cmd2Char = null;
     this.pollTimer = null;
     this.pollInFlight = false;
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
+    this.lastCmdPollTs = 0;
     this.noDataTimer = null;
 
     this.lastMainRxTs = 0;
@@ -2532,12 +2704,15 @@ class AtlasWebBleClient {
     this.onDisconnected = this.onDisconnected.bind(this);
     this.onMain = this.onMain.bind(this);
     this.onCompact = this.onCompact.bind(this);
+    this.onCmd1 = this.onCmd1.bind(this);
+    this.onCmd2 = this.onCmd2.bind(this);
   }
 
   async connect(options = {}) {
     if (!supportsWebBluetooth()) throw new Error("Web Bluetooth no disponible");
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
+    this.lastCmdPollTs = 0;
     this.lastMainRxTs = 0;
     this.lastCompactRxTs = 0;
     this.lastMainOkTs = 0;
@@ -2552,6 +2727,8 @@ class AtlasWebBleClient {
     this.lastCompactType = null;
     this.lastCompactLen = null;
     this.lastCompactHeadHex = null;
+    this.cmd1Char = null;
+    this.cmd2Char = null;
     if (this.noDataTimer) {
       clearTimeout(this.noDataTimer);
       this.noDataTimer = null;
@@ -2610,6 +2787,16 @@ class AtlasWebBleClient {
 
       this.mainChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_MAIN);
       this.compactChar = await service.getCharacteristic(VAKAROS_CHAR_TELEMETRY_COMPACT);
+      try {
+        this.cmd1Char = await service.getCharacteristic(VAKAROS_CHAR_COMMAND_1);
+      } catch {
+        this.cmd1Char = null;
+      }
+      try {
+        this.cmd2Char = await service.getCharacteristic(VAKAROS_CHAR_COMMAND_2);
+      } catch {
+        this.cmd2Char = null;
+      }
 
       const name = this.device.name || "Atlas";
       wsWanted = false;
@@ -2646,6 +2833,7 @@ class AtlasWebBleClient {
 
   onMain(evt) {
     const dv = evt.target.value;
+    const source = evt?.vklSource || "telemetry_main_notify";
     const now = Date.now();
     this.rxMainCount++;
     this.lastMainRxTs = now;
@@ -2665,6 +2853,17 @@ class AtlasWebBleClient {
       // ignore
     }
     const parsed = parseMainPacket(dv);
+    const boatLat = Number.isFinite(parsed?.latitude)
+      ? parsed.latitude
+      : Number.isFinite(lastState?.latitude)
+        ? lastState.latitude
+        : null;
+    const boatLon = Number.isFinite(parsed?.longitude)
+      ? parsed.longitude
+      : Number.isFinite(lastState?.longitude)
+        ? lastState.longitude
+        : null;
+    maybeAutoStartLineFromBle(dv, source, { boatLat, boatLon, tsMs: parsed?.ts_ms });
     if (!parsed) return;
     if (sessionRec.active) {
       recAdd("ble_parsed", { chan: "main", parsed });
@@ -2694,6 +2893,8 @@ class AtlasWebBleClient {
       latitude: parsed.latitude ?? lastState?.latitude ?? null,
       longitude: parsed.longitude ?? lastState?.longitude ?? null,
       heading_deg: parsed.heading_deg ?? lastState?.heading_deg ?? null,
+      heading_main_ts_ms:
+        typeof parsed.heading_deg === "number" ? parsed.ts_ms : (lastState?.heading_main_ts_ms ?? null),
       main_field_4: parsed.field_4 ?? null,
       main_field_5: parsed.field_5 ?? null,
       main_field_6: parsed.field_6 ?? null,
@@ -2706,6 +2907,7 @@ class AtlasWebBleClient {
 
   onCompact(evt) {
     const dv = evt.target.value;
+    const source = evt?.vklSource || "telemetry_compact_notify";
     const now = Date.now();
     this.rxCompactCount++;
     this.lastCompactRxTs = now;
@@ -2725,6 +2927,7 @@ class AtlasWebBleClient {
       // ignore
     }
     const parsed = parseCompactPacket(dv);
+    maybeAutoStartLineFromBle(dv, source, { tsMs: parsed?.ts_ms });
     if (!parsed) return;
     this.okCompactCount++;
     this.lastCompactOkTs = now;
@@ -2746,9 +2949,37 @@ class AtlasWebBleClient {
       last_event_ts_ms: parsed.ts_ms,
       last_error: null,
       heading_compact_deg: parsed.heading_deg ?? null,
+      heading_compact_ts_ms:
+        typeof parsed.heading_deg === "number" ? parsed.ts_ms : (lastState?.heading_compact_ts_ms ?? null),
       compact_field_2: parsed.field_2 ?? null,
       compact_raw_len: parsed.raw_len ?? null,
     });
+  }
+
+  onCmd1(evt) {
+    const dv = evt.target.value;
+    const source = evt?.vklSource || "command_1_notify";
+    if (sessionRec.active) {
+      recAdd("ble_rx", {
+        chan: "command_1",
+        raw_b64: dvToBase64(dv),
+        raw_len: dv?.byteLength ?? null,
+      });
+    }
+    maybeAutoStartLineFromBle(dv, source, { tsMs: Date.now() });
+  }
+
+  onCmd2(evt) {
+    const dv = evt.target.value;
+    const source = evt?.vklSource || "command_2_notify";
+    if (sessionRec.active) {
+      recAdd("ble_rx", {
+        chan: "command_2",
+        raw_b64: dvToBase64(dv),
+        raw_len: dv?.byteLength ?? null,
+      });
+    }
+    maybeAutoStartLineFromBle(dv, source, { tsMs: Date.now() });
   }
 
   startNoDataWatchdog() {
@@ -2807,6 +3038,34 @@ class AtlasWebBleClient {
         // ignore
       }
     }
+    if (this.cmd1Char) {
+      try {
+        this.cmd1Char.addEventListener("characteristicvaluechanged", this.onCmd1);
+        await this.cmd1Char.startNotifications();
+        try {
+          const v = await this.cmd1Char.readValue();
+          this.onCmd1({ target: { value: v }, vklSource: "command_1_read" });
+        } catch {
+          // ignore
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (this.cmd2Char) {
+      try {
+        this.cmd2Char.addEventListener("characteristicvaluechanged", this.onCmd2);
+        await this.cmd2Char.startNotifications();
+        try {
+          const v = await this.cmd2Char.readValue();
+          this.onCmd2({ target: { value: v }, vklSource: "command_2_read" });
+        } catch {
+          // ignore
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   startPolling() {
@@ -2818,14 +3077,26 @@ class AtlasWebBleClient {
       const now = Date.now();
       const staleMain = now - this.lastMainTs > 1200;
       const staleCompact = now - this.lastCompactTs > 1200;
+      const pollCmd = now - this.lastCmdPollTs > 1000;
       try {
         if (staleMain && this.mainChar) {
           const v = await this.mainChar.readValue();
-          this.onMain({ target: { value: v } });
+          this.onMain({ target: { value: v }, vklSource: "telemetry_main_poll" });
         }
         if (staleCompact && this.compactChar) {
           const v = await this.compactChar.readValue();
-          this.onCompact({ target: { value: v } });
+          this.onCompact({ target: { value: v }, vklSource: "telemetry_compact_poll" });
+        }
+        if (pollCmd) {
+          this.lastCmdPollTs = now;
+          if (this.cmd1Char) {
+            const v = await this.cmd1Char.readValue();
+            this.onCmd1({ target: { value: v }, vklSource: "command_1_poll" });
+          }
+          if (this.cmd2Char) {
+            const v = await this.cmd2Char.readValue();
+            this.onCmd2({ target: { value: v }, vklSource: "command_2_poll" });
+          }
         }
       } catch {
         // ignore
@@ -2855,6 +3126,16 @@ class AtlasWebBleClient {
       // ignore
     }
     try {
+      if (this.cmd1Char) this.cmd1Char.removeEventListener("characteristicvaluechanged", this.onCmd1);
+    } catch {
+      // ignore
+    }
+    try {
+      if (this.cmd2Char) this.cmd2Char.removeEventListener("characteristicvaluechanged", this.onCmd2);
+    } catch {
+      // ignore
+    }
+    try {
       if (this.device) this.device.removeEventListener("gattserverdisconnected", this.onDisconnected);
     } catch {
       // ignore
@@ -2868,6 +3149,8 @@ class AtlasWebBleClient {
     this.server = null;
     this.mainChar = null;
     this.compactChar = null;
+    this.cmd1Char = null;
+    this.cmd2Char = null;
     setBleUi(false, "—");
     applyBlePartialState({ connected: false, last_error: null });
   }
@@ -3168,7 +3451,9 @@ lastState = {
   latitude: null,
   longitude: null,
   heading_deg: null,
+  heading_main_ts_ms: null,
   heading_compact_deg: null,
+  heading_compact_ts_ms: null,
   heading_filtered_deg: null,
   sog_knots: null,
   cog_deg: null,

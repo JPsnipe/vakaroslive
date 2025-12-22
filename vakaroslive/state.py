@@ -101,7 +101,9 @@ class AtlasState:
     longitude: float | None = None
 
     heading_deg: float | None = None
+    heading_main_ts_ms: int | None = None
     heading_compact_deg: float | None = None
+    heading_compact_ts_ms: int | None = None
 
     sog_knots: float | None = None
     cog_deg: float | None = None
@@ -129,6 +131,8 @@ class AtlasState:
     _last_compact_sog_ts_ms: int | None = field(default=None, repr=False)
     _last_derived_sog_knots: float | None = field(default=None, repr=False)
     _last_field6_sog_ts_ms: int | None = field(default=None, repr=False)
+    _cog_last_hdg_deg: float | None = field(default=None, repr=False)
+    _cog_last_update_ts_ms: int | None = field(default=None, repr=False)
     marks: RaceMarks = field(default_factory=RaceMarks)
 
     def to_dict(self) -> dict[str, Any]:
@@ -139,7 +143,9 @@ class AtlasState:
             "latitude": self.latitude,
             "longitude": self.longitude,
             "heading_deg": self.heading_deg,
+            "heading_main_ts_ms": self.heading_main_ts_ms,
             "heading_compact_deg": self.heading_compact_deg,
+            "heading_compact_ts_ms": self.heading_compact_ts_ms,
             "sog_knots": self.sog_knots,
             "cog_deg": self.cog_deg,
             "main_field_4": self.main_field_4,
@@ -154,6 +160,113 @@ class AtlasState:
             "last_error": self.last_error,
             "marks": self.marks.to_dict(),
         }
+
+    @staticmethod
+    def _wrap_deg(value: float) -> float:
+        v = float(value) % 360.0
+        return v + 360.0 if v < 0.0 else v
+
+    @staticmethod
+    def _delta_deg(a_deg: float, b_deg: float) -> float:
+        return ((float(a_deg) - float(b_deg) + 540.0) % 360.0) - 180.0
+
+    @classmethod
+    def _blend_deg(cls, a_deg: float, b_deg: float, weight_b: float) -> float | None:
+        w = max(0.0, min(1.0, float(weight_b)))
+        ar = math.radians(float(a_deg))
+        br = math.radians(float(b_deg))
+        x = (1.0 - w) * math.cos(ar) + w * math.cos(br)
+        y = (1.0 - w) * math.sin(ar) + w * math.sin(br)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
+        if x == 0.0 and y == 0.0:
+            return None
+        return cls._wrap_deg(math.degrees(math.atan2(y, x)))
+
+    @staticmethod
+    def _cog_gps_weight_for_sog(sog_kn: float | None) -> float:
+        if not isinstance(sog_kn, (int, float)) or not math.isfinite(sog_kn):
+            return 0.5
+        sog = float(sog_kn)
+        sog_low = 1.0
+        sog_high = 3.0
+        alpha_low = 0.2
+        alpha_high = 0.8
+        t = (sog - sog_low) / max(0.001, (sog_high - sog_low))
+        t = max(0.0, min(1.0, t))
+        return alpha_low + (alpha_high - alpha_low) * t
+
+    def _select_heading_for_fusion(self, ts_ms: int) -> float | None:
+        hc = self.heading_compact_deg
+        if isinstance(hc, (int, float)) and math.isfinite(hc) and 0.0 <= float(hc) <= 360.0:
+            if (
+                self.heading_compact_ts_ms is None
+                or abs(int(ts_ms) - int(self.heading_compact_ts_ms)) <= 2500
+            ):
+                return float(hc)
+
+        hm = self.heading_deg
+        if isinstance(hm, (int, float)) and math.isfinite(hm) and 0.0 <= float(hm) <= 360.0:
+            if (
+                self.heading_main_ts_ms is None
+                or abs(int(ts_ms) - int(self.heading_main_ts_ms)) <= 2500
+            ):
+                return float(hm)
+        return None
+
+    def _update_cog_fusion(
+        self,
+        *,
+        ts_ms: int,
+        sog_kn: float | None,
+        heading_deg: float | None,
+        cog_gps_deg: float | None,
+    ) -> float | None:
+        moving = (
+            isinstance(sog_kn, (int, float)) and math.isfinite(sog_kn) and float(sog_kn) > 0.3
+        )
+        recently_updated = (
+            self._cog_last_update_ts_ms is not None
+            and int(ts_ms) - int(self._cog_last_update_ts_ms) < 7000
+        )
+
+        predicted: float | None = None
+        if isinstance(self.cog_deg, (int, float)) and math.isfinite(self.cog_deg):
+            predicted = float(self.cog_deg)
+
+        if (
+            moving
+            and predicted is not None
+            and isinstance(heading_deg, (int, float))
+            and math.isfinite(heading_deg)
+            and isinstance(self._cog_last_hdg_deg, (int, float))
+            and math.isfinite(self._cog_last_hdg_deg)
+        ):
+            predicted = self._wrap_deg(
+                predicted + self._delta_deg(float(heading_deg), float(self._cog_last_hdg_deg))
+            )
+        elif moving and predicted is None and isinstance(heading_deg, (int, float)) and math.isfinite(heading_deg):
+            predicted = self._wrap_deg(float(heading_deg))
+
+        if isinstance(heading_deg, (int, float)) and math.isfinite(heading_deg):
+            self._cog_last_hdg_deg = self._wrap_deg(float(heading_deg))
+
+        if isinstance(cog_gps_deg, (int, float)) and math.isfinite(cog_gps_deg):
+            w_gps = self._cog_gps_weight_for_sog(sog_kn)
+            fused = (
+                self._blend_deg(predicted, float(cog_gps_deg), w_gps)
+                if predicted is not None
+                else self._wrap_deg(float(cog_gps_deg))
+            )
+            if fused is not None:
+                self.cog_deg = fused
+                self._cog_last_update_ts_ms = int(ts_ms)
+            return self.cog_deg
+
+        if predicted is not None and (moving or recently_updated):
+            self.cog_deg = predicted
+            self._cog_last_update_ts_ms = int(ts_ms)
+        return self.cog_deg
 
     def _decode_sog_knots_from_compact_field2(self, field_2: Any) -> float | None:
         if not isinstance(field_2, int):
@@ -334,17 +447,22 @@ class AtlasState:
                 self._fix_history.clear()
                 self.sog_knots = None
                 self.cog_deg = None
+                self.heading_main_ts_ms = None
+                self.heading_compact_ts_ms = None
                 self._compact_sog_scale = None
                 self._compact_sog_scale_hits = {100: 0, 10: 0, 1: 0}
                 self._last_compact_sog_ts_ms = None
                 self._last_derived_sog_knots = None
                 self._last_field6_sog_ts_ms = None
+                self._cog_last_hdg_deg = None
+                self._cog_last_update_ts_ms = None
             return False
 
         if etype == "telemetry_compact":
             heading = event.get("heading_deg")
             if isinstance(heading, (int, float)):
                 self.heading_compact_deg = float(heading)
+                self.heading_compact_ts_ms = int(self.last_event_ts_ms)
             field_2 = event.get("field_2")
             if isinstance(field_2, int):
                 self.compact_field_2 = field_2
@@ -366,6 +484,7 @@ class AtlasState:
         reserved_hex = event.get("reserved_hex")
         tail_hex = event.get("tail_hex")
         raw_len = event.get("raw_len")
+        cog_gps_deg: float | None = None
         if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
             self.latitude = float(lat)
             self.longitude = float(lon)
@@ -382,7 +501,7 @@ class AtlasState:
                 dt_s = max(0.001, (last_ts - first_ts) / 1000.0)
                 dist_m = haversine_m(first_lat, first_lon, last_lat, last_lon)
                 sog_kn = (dist_m / dt_s) * MPS_TO_KNOTS
-                if sog_kn <= 40.0:
+                if 0.0 < sog_kn <= 40.0:
                     self._last_derived_sog_knots = sog_kn
                     if (
                         self._last_compact_sog_ts_ms is None
@@ -390,10 +509,12 @@ class AtlasState:
                         or self.sog_knots is None
                     ):
                         self.sog_knots = sog_kn
-                    self.cog_deg = bearing_deg(first_lat, first_lon, last_lat, last_lon)
+                    if dist_m >= 1.0:
+                        cog_gps_deg = bearing_deg(first_lat, first_lon, last_lat, last_lon)
 
-        if isinstance(heading, (int, float)):
+        if isinstance(heading, (int, float)) and math.isfinite(heading):
             self.heading_deg = float(heading)
+            self.heading_main_ts_ms = int(self.last_event_ts_ms)
 
         if isinstance(field_4, (int, float)):
             self.main_field_4 = float(field_4)
@@ -414,4 +535,23 @@ class AtlasState:
             self.main_tail_hex = tail_hex
         if isinstance(raw_len, int):
             self.main_raw_len = raw_len
+
+        ts_ms = int(self.last_event_ts_ms)
+        hdg_for_fusion = self._select_heading_for_fusion(ts_ms)
+        sog_for_fusion: float | None
+        if isinstance(self.sog_knots, (int, float)) and math.isfinite(self.sog_knots):
+            sog_for_fusion = float(self.sog_knots)
+        else:
+            sog_for_fusion = (
+                float(self._last_derived_sog_knots)
+                if isinstance(self._last_derived_sog_knots, (int, float))
+                and math.isfinite(self._last_derived_sog_knots)
+                else None
+            )
+        self._update_cog_fusion(
+            ts_ms=ts_ms,
+            sog_kn=sog_for_fusion,
+            heading_deg=hdg_for_fusion,
+            cog_gps_deg=cog_gps_deg,
+        )
         return False
