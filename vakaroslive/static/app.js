@@ -414,10 +414,6 @@ function fmtDuration(s) {
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-function loadDampingScale() {
-  return null;
-}
-
 function sliderToScale(value) {
   if (!Number.isFinite(value)) return 1.0;
   if (value <= 0) return 0;
@@ -489,12 +485,13 @@ function saveDampingUi() {
 
 function setDampingField(key, value, opts = {}) {
   const clamped = clamp(value, DAMPING_UI_BOUNDS.min, DAMPING_UI_BOUNDS.max);
-  dampingUi[key] = clamped;
-  dampingScaleByKey[key] = sliderToScale(clamped);
+  const snapped = Math.round(clamped);
+  dampingUi[key] = snapped;
+  dampingScaleByKey[key] = sliderToScale(snapped);
 
   const field = DAMPING_FIELDS[key];
-  if (field?.slider) field.slider.value = String(Math.round(clamped));
-  if (field?.value) field.value.textContent = clamped <= 0 ? "OFF" : String(Math.round(clamped));
+  if (field?.slider) field.slider.value = String(snapped);
+  if (field?.value) field.value.textContent = snapped <= 0 ? "OFF" : String(snapped);
 
   if (opts.persist !== false) saveDampingUi();
 }
