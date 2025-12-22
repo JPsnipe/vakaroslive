@@ -5,7 +5,7 @@ function setText(el, value) {
   el.textContent = value;
 }
 
-const APP_VERSION = "v23";
+const APP_VERSION = "v24";
 
 const els = {
   status: $("status"),
