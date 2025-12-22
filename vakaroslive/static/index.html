@@ -173,6 +173,24 @@
       <div id="map" class="map"></div>
       <div class="muted" id="lastUpdate">-</div>
     </section>
+
+    <section class="card" data-card="experts">
+      <div class="card__title">
+        <span>Expert parameters</span>
+        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+      </div>
+      <div class="expert-row">
+        <div class="expert-label">
+          <div class="expert-title">Damping dinámico</div>
+          <div class="muted">Suaviza HDG/COG/SOG y métricas derivadas.</div>
+        </div>
+        <div class="expert-control">
+          <input id="dampingScale" type="range" min="0.6" max="1.8" step="0.05" value="1" />
+          <div class="muted mono" id="dampingScaleValue">1.00x</div>
+        </div>
+      </div>
+      <div class="muted">Avanzado: valores altos = más estabilidad, valores bajos = más respuesta.</div>
+    </section>
   </main>
 
   <script src="./leaflet.js"></script>

@@ -5,6 +5,10 @@ function setText(el, value) {
   el.textContent = value;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 const APP_VERSION = "v25";
 
 const els = {
@@ -69,6 +73,8 @@ const els = {
   scan: $("scan"),
   scanInfo: $("scanInfo"),
   deviceList: $("deviceList"),
+  dampingScale: $("dampingScale"),
+  dampingScaleValue: $("dampingScaleValue"),
 };
 
 let lastState = null;
@@ -89,6 +95,17 @@ let lastTrackTsMs = null;
 const CHART_WINDOW_S = 120;
 const CHART_ALPHA = 0.35; // EMA (~5s)
 const KNOTS_PER_MPS = 1.9438444924406048;
+const DAMPING_KEY = "vkl_damping_scale_v1";
+const DAMPING_DEFAULT = 1.0;
+const DAMPING_BOUNDS = { min: 0.6, max: 1.8 };
+const DAMPING_PROFILE = {
+  heading: { tauMin: 1.2, tauMax: 9.0, noiseRange: 12 },
+  cog: { tauMin: 1.8, tauMax: 12.0, noiseRange: 20 },
+  sog: { tauMin: 0.8, tauMax: 6.0, noiseRange: 3 },
+  heel: { tauMin: 0.6, tauMax: 2.5, noiseRange: 6 },
+  pitch: { tauMin: 0.6, tauMax: 2.5, noiseRange: 6 },
+  position: { tauMin: 0.8, tauMax: 3.5, noiseRange: 12 },
+};
 let perfSamples = []; // [{sec, sog, cmg, hdg}]
 let lastPerfSec = null;
 let emaSog = null;
@@ -104,6 +121,19 @@ let compactSogScale = null; // 100|10|1
 let compactSogScaleHits = { 100: 0, 10: 0, 1: 0 };
 let lastField6SogTsMs = 0;
 let bleInfoBaseText = null;
+let dampingScale = DAMPING_DEFAULT;
+let dampingState = {
+  lastTsMs: null,
+  sog: null,
+  heel: null,
+  pitch: null,
+  lat: null,
+  lon: null,
+  headingSin: null,
+  headingCos: null,
+  cogSin: null,
+  cogCos: null,
+};
 
 // Grabación de sesión (raw + parseado) para depurar el protocolo.
 let sessionRec = {
@@ -347,6 +377,79 @@ function fmtDuration(s) {
   const mm = Math.floor(sec / 60);
   const ss = sec % 60;
   return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+function loadDampingScale() {
+  let value = DAMPING_DEFAULT;
+  try {
+    const raw = localStorage.getItem(DAMPING_KEY);
+    const parsed = Number.parseFloat(raw);
+    if (Number.isFinite(parsed)) value = parsed;
+  } catch {
+    // ignore
+  }
+  return clamp(value, DAMPING_BOUNDS.min, DAMPING_BOUNDS.max);
+}
+
+function setDampingScale(value) {
+  dampingScale = clamp(value, DAMPING_BOUNDS.min, DAMPING_BOUNDS.max);
+  if (els.dampingScale) els.dampingScale.value = dampingScale.toFixed(2);
+  if (els.dampingScaleValue) els.dampingScaleValue.textContent = `${dampingScale.toFixed(2)}x`;
+  try {
+    localStorage.setItem(DAMPING_KEY, dampingScale.toFixed(2));
+  } catch {
+    // ignore
+  }
+}
+
+function tauForSpeed(profile, sogKn) {
+  const minTau = profile.tauMin;
+  const maxTau = profile.tauMax;
+  if (!Number.isFinite(sogKn)) return (minTau + maxTau) / 2.0;
+  const norm = clamp((sogKn - 2.0) / 10.0, 0, 1);
+  return maxTau - norm * (maxTau - minTau);
+}
+
+function dampScalar(prev, next, dt, tau, noiseRange) {
+  if (!Number.isFinite(next)) return null;
+  if (!Number.isFinite(dt) || dt <= 0 || !Number.isFinite(tau)) return next;
+  if (!Number.isFinite(prev)) return next;
+  let adjustedTau = tau;
+  if (Number.isFinite(noiseRange) && noiseRange > 0) {
+    const noise = Math.abs(next - prev);
+    const boost = 1 + clamp(noise / noiseRange, 0, 1) * 0.6;
+    adjustedTau *= boost;
+  }
+  adjustedTau *= dampingScale;
+  const alpha = 1 - Math.exp(-dt / Math.max(0.05, adjustedTau));
+  return prev + alpha * (next - prev);
+}
+
+function dampAngle(prevSin, prevCos, nextDeg, dt, tau, noiseRange) {
+  if (!Number.isFinite(nextDeg)) return { deg: null, sin: null, cos: null };
+  if (!Number.isFinite(dt) || dt <= 0 || !Number.isFinite(tau)) {
+    const rad = (nextDeg * Math.PI) / 180.0;
+    return { deg: (nextDeg + 360) % 360, sin: Math.sin(rad), cos: Math.cos(rad) };
+  }
+  const rad = (nextDeg * Math.PI) / 180.0;
+  const nextSin = Math.sin(rad);
+  const nextCos = Math.cos(rad);
+  if (!Number.isFinite(prevSin) || !Number.isFinite(prevCos)) {
+    return { deg: (nextDeg + 360) % 360, sin: nextSin, cos: nextCos };
+  }
+  let adjustedTau = tau;
+  if (Number.isFinite(noiseRange) && noiseRange > 0) {
+    const prevDeg = (Math.atan2(prevSin, prevCos) * 180.0) / Math.PI;
+    const delta = ((nextDeg - prevDeg + 540.0) % 360.0) - 180.0;
+    const boost = 1 + clamp(Math.abs(delta) / noiseRange, 0, 1) * 0.6;
+    adjustedTau *= boost;
+  }
+  adjustedTau *= dampingScale;
+  const alpha = 1 - Math.exp(-dt / Math.max(0.05, adjustedTau));
+  const sin = prevSin + alpha * (nextSin - prevSin);
+  const cos = prevCos + alpha * (nextCos - prevCos);
+  const deg = (Math.atan2(sin, cos) * 180.0) / Math.PI;
+  return { deg: (deg + 360.0) % 360.0, sin, cos };
 }
 
 function haversineM(lat1, lon1, lat2, lon2) {
@@ -613,12 +716,121 @@ function targetPointForId(id) {
   return null;
 }
 
-function getMagHeadingDeg(state) {
+function getRawHeadingDeg(state) {
   const hc = state?.heading_compact_deg;
   if (typeof hc === "number" && hc >= 0 && hc <= 360) return hc;
   const hm = state?.heading_deg;
   if (typeof hm === "number" && hm >= 0 && hm <= 360) return hm;
   return null;
+}
+
+function getMagHeadingDeg(state) {
+  const hf = state?.heading_filtered_deg;
+  if (typeof hf === "number" && hf >= 0 && hf <= 360) return hf;
+  return getRawHeadingDeg(state);
+}
+
+function applyDynamicDamping(state) {
+  const tsMs =
+    typeof state?.last_event_ts_ms === "number" ? state.last_event_ts_ms : Date.now();
+  const dt = Number.isFinite(dampingState.lastTsMs)
+    ? Math.max(0.016, (tsMs - dampingState.lastTsMs) / 1000.0)
+    : null;
+  dampingState.lastTsMs = tsMs;
+
+  const sogRaw = typeof state?.sog_knots === "number" ? state.sog_knots : null;
+  const next = { ...state };
+
+  const sogTau = tauForSpeed(DAMPING_PROFILE.sog, sogRaw);
+  const sog = dampScalar(dampingState.sog, sogRaw, dt, sogTau, DAMPING_PROFILE.sog.noiseRange);
+  if (Number.isFinite(sog)) {
+    dampingState.sog = sog;
+    next.sog_knots = sog;
+  } else {
+    dampingState.sog = null;
+  }
+
+  const headingRaw = getRawHeadingDeg(state);
+  const headingTau = tauForSpeed(DAMPING_PROFILE.heading, sogRaw);
+  const heading = dampAngle(
+    dampingState.headingSin,
+    dampingState.headingCos,
+    headingRaw,
+    dt,
+    headingTau,
+    DAMPING_PROFILE.heading.noiseRange,
+  );
+  if (Number.isFinite(heading.deg)) {
+    dampingState.headingSin = heading.sin;
+    dampingState.headingCos = heading.cos;
+    next.heading_filtered_deg = heading.deg;
+  } else {
+    dampingState.headingSin = null;
+    dampingState.headingCos = null;
+    next.heading_filtered_deg = null;
+  }
+
+  const cogRaw = typeof state?.cog_deg === "number" ? state.cog_deg : null;
+  const cogTau = tauForSpeed(DAMPING_PROFILE.cog, sogRaw);
+  const cog = dampAngle(
+    dampingState.cogSin,
+    dampingState.cogCos,
+    cogRaw,
+    dt,
+    cogTau,
+    DAMPING_PROFILE.cog.noiseRange,
+  );
+  if (Number.isFinite(cog.deg)) {
+    dampingState.cogSin = cog.sin;
+    dampingState.cogCos = cog.cos;
+    next.cog_deg = cog.deg;
+  } else {
+    dampingState.cogSin = null;
+    dampingState.cogCos = null;
+  }
+
+  const heelRaw = typeof state?.main_field_5 === "number" ? state.main_field_5 : null;
+  const heelTau = tauForSpeed(DAMPING_PROFILE.heel, sogRaw);
+  const heel = dampScalar(dampingState.heel, heelRaw, dt, heelTau, DAMPING_PROFILE.heel.noiseRange);
+  if (Number.isFinite(heel)) {
+    dampingState.heel = heel;
+    next.main_field_5 = heel;
+  } else {
+    dampingState.heel = null;
+  }
+
+  const pitchRaw = typeof state?.main_field_4 === "number" ? state.main_field_4 : null;
+  const pitchTau = tauForSpeed(DAMPING_PROFILE.pitch, sogRaw);
+  const pitch = dampScalar(
+    dampingState.pitch,
+    pitchRaw,
+    dt,
+    pitchTau,
+    DAMPING_PROFILE.pitch.noiseRange,
+  );
+  if (Number.isFinite(pitch)) {
+    dampingState.pitch = pitch;
+    next.main_field_4 = pitch;
+  } else {
+    dampingState.pitch = null;
+  }
+
+  const latRaw = typeof state?.latitude === "number" ? state.latitude : null;
+  const lonRaw = typeof state?.longitude === "number" ? state.longitude : null;
+  const posTau = tauForSpeed(DAMPING_PROFILE.position, sogRaw);
+  const lat = dampScalar(dampingState.lat, latRaw, dt, posTau, null);
+  const lon = dampScalar(dampingState.lon, lonRaw, dt, posTau, null);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    dampingState.lat = lat;
+    dampingState.lon = lon;
+    next.latitude = lat;
+    next.longitude = lon;
+  } else if (!Number.isFinite(latRaw) || !Number.isFinite(lonRaw)) {
+    dampingState.lat = null;
+    dampingState.lon = null;
+  }
+
+  return next;
 }
 
 function supportsWebBluetooth() {
@@ -1747,18 +1959,21 @@ function updateStartLineStats() {
 }
 
 function applyState(state) {
-  lastState = state;
+  const rawState = state;
 
   // Atlas: Field 6 parece ser SOG en m/s (mejor que compact/derivado). Normaliza a nudos.
-  if (typeof state?.main_field_6 === "number" && Number.isFinite(state.main_field_6)) {
-    const kn = state.main_field_6 * KNOTS_PER_MPS;
+  if (typeof rawState?.main_field_6 === "number" && Number.isFinite(rawState.main_field_6)) {
+    const kn = rawState.main_field_6 * KNOTS_PER_MPS;
     if (Number.isFinite(kn) && kn >= 0 && kn <= 60) {
-      state.sog_knots = kn;
+      rawState.sog_knots = kn;
     }
   }
 
   // En modo BLE directo no recibimos SOG/COG: lo derivamos de lat/lon recientes.
-  deriveSogCogInPlace(state);
+  deriveSogCogInPlace(rawState);
+  const uiState = applyDynamicDamping(rawState);
+  lastState = uiState;
+  state = uiState;
 
   const connected = !!state.connected;
   const extra = state.last_error ? ` (${shortErr(state.last_error)})` : "";
@@ -1839,9 +2054,9 @@ function applyState(state) {
   );
   setText(els.compact2, typeof state.compact_field_2 === "number" ? String(state.compact_field_2) : "—");
 
-  if (typeof state.latitude === "number" && typeof state.longitude === "number") {
-    const ts = state.last_event_ts_ms || Date.now();
-    const next = { lat: state.latitude, lon: state.longitude };
+  if (typeof rawState.latitude === "number" && typeof rawState.longitude === "number") {
+    const ts = rawState.last_event_ts_ms || Date.now();
+    const next = { lat: rawState.latitude, lon: rawState.longitude };
     const last = trackPoints.length ? trackPoints[trackPoints.length - 1] : null;
     const lastTs = lastTrackTsMs;
 
@@ -2485,6 +2700,17 @@ function initCardCollapsing() {
   }
 }
 
+function initExpertControls() {
+  dampingScale = loadDampingScale();
+  setDampingScale(dampingScale);
+  if (els.dampingScale) {
+    els.dampingScale.addEventListener("input", (e) => {
+      const value = Number.parseFloat(e.target.value);
+      if (Number.isFinite(value)) setDampingScale(value);
+    });
+  }
+}
+
 els.setMark?.addEventListener("click", () => {
   sendCmd("set_mark");
 });
@@ -2614,6 +2840,7 @@ if (document?.title?.startsWith("VakarosLive")) {
 }
 
 initCardCollapsing();
+initExpertControls();
 initMap();
 recSetActive(false);
 setBleUi(false, "—");
@@ -2633,6 +2860,7 @@ lastState = {
   longitude: null,
   heading_deg: null,
   heading_compact_deg: null,
+  heading_filtered_deg: null,
   sog_knots: null,
   cog_deg: null,
   main_field_4: null,

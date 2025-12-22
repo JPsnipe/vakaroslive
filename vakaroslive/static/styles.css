@@ -467,6 +467,36 @@ canvas {
   opacity: 0.9;
 }
 
+.expert-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.expert-label {
+  display: grid;
+  gap: 4px;
+}
+
+.expert-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.expert-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.expert-control input[type="range"] {
+  width: 160px;
+  accent-color: var(--accent);
+}
+
 .vkl-div-icon {
   background: transparent;
   border: none;
