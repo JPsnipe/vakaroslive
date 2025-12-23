@@ -426,7 +426,7 @@ canvas {
   flex-wrap: wrap;
 }
 
-.card--collapsed > :not(.card__title) {
+.card--collapsed> :not(.card__title) {
   display: none;
 }
 
@@ -587,7 +587,7 @@ body.map-fullscreen .grid {
   gap: 0;
 }
 
-body.map-fullscreen .grid > :not([data-card="map"]) {
+body.map-fullscreen .grid> :not([data-card="map"]) {
   display: none;
 }
 
@@ -619,5 +619,64 @@ body.map-fullscreen [data-card="map"] .map {
 }
 
 body.map-fullscreen [data-card="map"] #lastUpdate {
+  display: none;
+}
+
+body.perf-fullscreen {
+  overflow: hidden;
+}
+
+body.perf-fullscreen .header {
+  display: none;
+}
+
+body.perf-fullscreen .grid {
+  padding: 0;
+  gap: 0;
+}
+
+body.perf-fullscreen .grid> :not([data-card="race"]) {
+  display: none;
+}
+
+body.perf-fullscreen [data-card="race"] {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg);
+  display: flex !important;
+  flex-direction: column;
+}
+
+body.perf-fullscreen [data-card="race"] .card__title {
+  padding: 14px 16px;
+  margin: 0;
+  background: var(--bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+body.perf-fullscreen [data-card="race"] .chart {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 10px;
+}
+
+body.perf-fullscreen [data-card="race"] .chart__canvas {
+  flex: 1;
+  height: auto;
+  margin: 0;
+  border-radius: 8px;
+}
+
+body.perf-fullscreen [data-card="race"] :not(.card__title):not(.chart):not(.chart *) {
   display: none;
 }

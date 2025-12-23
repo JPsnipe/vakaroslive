@@ -18,7 +18,8 @@
       <div class="header__ble">
         <button id="bleConnect" class="btn btn--sm">Conectar BLE</button>
         <button id="bleDisconnect" class="btn btn--ghost btn--sm" disabled>Desconectar</button>
-        <button id="recToggle" class="btn btn--ghost btn--sm" type="button" title="Grabar sesión (raw + parseado)">Grabar</button>
+        <button id="recToggle" class="btn btn--ghost btn--sm" type="button"
+          title="Grabar sesión (raw + parseado)">Grabar</button>
         <button id="recDownload" class="btn btn--ghost btn--sm" type="button" disabled>Descargar</button>
         <div class="header__settings">
           <label class="toggle" title="Mantiene la pantalla encendida (Wake Lock)">
@@ -94,8 +95,11 @@
 
     <section class="card card--wide" data-card="race">
       <div class="card__title">
-        <span>Balizas</span>
-        <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+        <span>Balizas / Rendimiento</span>
+        <div style="margin-left:auto; display:flex; gap:4px">
+          <button id="perfFullscreen" class="map-btn">Full</button>
+          <button class="map-btn card-toggle" type="button" data-card-toggle aria-label="Minimizar">▾</button>
+        </div>
       </div>
       <div class="row">
         <span class="muted">Tipo</span>
@@ -136,11 +140,10 @@
       </div>
       <div class="chart">
         <canvas id="perfChart" class="chart__canvas"></canvas>
-        <div class="chart__legend muted">
+        <div id="perfLegend" class="chart__legend muted">
           <span class="legend legend--sog">SOG</span>
           <span class="legend legend--cmg">CMG</span>
-          <span class="legend legend--hdg">HDG (mag)</span>
-          <span class="chart__meta">1s · avg ~5s</span>
+          <span class="legend legend--hdg">HDG</span>
         </div>
       </div>
     </section>

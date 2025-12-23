@@ -146,6 +146,7 @@ let emaCos = null;
 let lastHdgEma = null;
 let lastHdgUnwrapped = null;
 let chartDrawPending = false;
+let perfFullscreenOn = false;
 let fixHistory = []; // [{tsMs, lat, lon}]
 let cogFusion = { cogDeg: null, lastHdgDeg: null, lastUpdateTsMs: null };
 let lastDerivedSogKn = null;
@@ -1741,6 +1742,18 @@ function _niceRange(min, max, padMin) {
   return { min, max };
 }
 
+function setPerfFullscreen(on) {
+  perfFullscreenOn = on;
+  if (on) {
+    document.body.classList.add("perf-fullscreen");
+    document.body.classList.remove("map-fullscreen");
+    mapFullscreenOn = false;
+  } else {
+    document.body.classList.remove("perf-fullscreen");
+  }
+  scheduleChartDraw();
+}
+
 function _drawSeries(ctx, samples, xOf, yOf, color) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -1781,13 +1794,16 @@ function drawPerfChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "rgba(0,0,0,0.10)";
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
   ctx.fillRect(0, 0, w, h);
 
-  ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
-  ctx.fillStyle = "rgba(232,238,252,0.70)";
+  const fontMono = "bold 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  const fontSans = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+  const fontBig = "bold 18px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
 
   if (!perfSamples.length) {
+    ctx.font = fontSans;
+    ctx.fillStyle = "rgba(232,238,252,0.70)";
     ctx.fillText("Esperando telemetría…", 12, 20);
     return;
   }
@@ -1796,136 +1812,119 @@ function drawPerfChart() {
   const startSec = endSec - CHART_WINDOW_S;
   const win = perfSamples.filter((p) => p.sec >= startSec);
 
-  const padL = 44;
-  const padR = 10;
-  const padT = 10;
-  const padB = 18;
-  const gap = 10;
+  const padL = 50;
+  const padR = 15;
+  const padT = 15;
+  const padB = 25;
+  const panelGap = 15;
+
   const innerW = Math.max(10, w - padL - padR);
   const innerH = Math.max(10, h - padT - padB);
-  const topH = Math.max(40, Math.round(innerH * 0.60));
-  const botH = Math.max(30, innerH - topH - gap);
-  const topY0 = padT;
-  const topY1 = padT + topH;
-  const botY0 = topY1 + gap;
-  const botY1 = padT + innerH;
+
+  // 3 sections: SOG, CMG, HDG
+  const sectionH = (innerH - panelGap * 2) / 3.0;
 
   const xOf = (sec) => padL + ((sec - startSec) / CHART_WINDOW_S) * innerW;
 
-  // Time grid
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  const drawPanel = (index, series, label, color, minVal = null, maxVal = null, unit = "") => {
+    const y0 = padT + index * (sectionH + panelGap);
+    const y1 = y0 + sectionH;
+
+    // Background for panel
+    ctx.fillStyle = "rgba(255,255,255,0.02)";
+    ctx.fillRect(padL, y0, innerW, sectionH);
+
+    let vMin = minVal !== null ? minVal : 0;
+    let vMax = maxVal !== null ? maxVal : 1;
+    let hadData = false;
+
+    if (minVal === null || maxVal === null) {
+      for (const p of series) {
+        if (!Number.isFinite(p.v)) continue;
+        if (!hadData) {
+          vMin = vMax = p.v;
+          hadData = true;
+        } else {
+          vMin = Math.min(vMin, p.v);
+          vMax = Math.max(vMax, p.v);
+        }
+      }
+    }
+
+    const range = _niceRange(vMin, vMax, index === 2 ? 5.0 : 0.5);
+    const den = Math.max(0.001, range.max - range.min);
+    const yOf = (v) => y1 - ((v - range.min) / den) * sectionH;
+
+    // Grid
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
+
+    // Horiz lines
+    for (let i = 0; i <= 2; i++) {
+      const y = y0 + (i / 2.0) * sectionH;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(w - padR, y);
+      ctx.stroke();
+    }
+
+    // Series
+    _drawSeries(ctx, series, (p) => xOf(p.sec), yOf, color);
+
+    // Axis labels
+    ctx.font = fontMono;
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    const labelMax = label === "HDG" ? (((range.max % 360) + 360) % 360).toFixed(0) : range.max.toFixed(1);
+    const labelMin = label === "HDG" ? (((range.min % 360) + 360) % 360).toFixed(0) : range.min.toFixed(1);
+    ctx.fillText(labelMax, 8, y0 + 10);
+    ctx.fillText(labelMin, 8, y1 - 2);
+
+    // Panel title and Current Value Overlay
+    ctx.font = fontSans;
+    ctx.fillStyle = "rgba(159, 176, 209, 0.8)";
+    ctx.fillText(label, padL + 5, y0 + 12);
+
+    const latest = win.length ? win[win.length - 1] : null;
+    let curV = null;
+    if (label === "SOG") curV = latest?.sog;
+    if (label === "CMG") curV = latest?.cmg;
+    if (label === "HDG") curV = latest?.hdg;
+
+    if (Number.isFinite(curV)) {
+      ctx.font = fontBig;
+      ctx.fillStyle = color;
+      ctx.textAlign = "right";
+      let displayV = label === "HDG" ? ((curV % 360) + 360) % 360 : curV;
+      ctx.fillText(`${displayV.toFixed(label === "HDG" ? 0 : 1)}${unit}`, w - 10, y0 + 18);
+      ctx.textAlign = "left";
+    }
+
+    return { yOf, y0, y1 };
+  };
+
+  // Time Axis (shared)
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
   const tickStep = 30;
   const firstTick = Math.ceil(startSec / tickStep) * tickStep;
+  ctx.font = fontMono;
+  ctx.fillStyle = "rgba(159, 176, 209, 0.6)";
   for (let t = firstTick; t <= endSec; t += tickStep) {
     const x = xOf(t);
     ctx.beginPath();
-    ctx.moveTo(x, topY0);
-    ctx.lineTo(x, botY1);
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, h - padB);
     ctx.stroke();
 
     const mm = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
     const ss = String(t % 60).padStart(2, "0");
-    ctx.fillText(`${mm}:${ss}`, x - 16, h - 4);
+    ctx.fillText(`${mm}:${ss}`, x - 18, h - 8);
   }
 
-  // Panel 1: SOG + CMG (kn)
-  let topMin = 0;
-  let topMax = 0;
-  let hadTop = false;
-  for (const p of win) {
-    for (const v of [p.sog, p.cmg]) {
-      if (!Number.isFinite(v)) continue;
-      if (!hadTop) {
-        topMin = v;
-        topMax = v;
-        hadTop = true;
-      } else {
-        topMin = Math.min(topMin, v);
-        topMax = Math.max(topMax, v);
-      }
-    }
-  }
-  if (!hadTop) {
-    topMin = 0;
-    topMax = 1;
-  }
-  topMin = Math.min(topMin, 0);
-  topMax = Math.max(topMax, 0);
-  const topRange = _niceRange(topMin, topMax, 0.5);
-  const topDen = Math.max(0.001, topRange.max - topRange.min);
-  const yTop = (v) => topY1 - ((v - topRange.min) / topDen) * topH;
-
-  // Horizontal grid
-  for (let i = 0; i <= 4; i++) {
-    const y = topY0 + (i / 4.0) * topH;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(w - padR, y);
-    ctx.stroke();
-  }
-
-  // Zero line
-  const yZero = yTop(0);
-  if (yZero >= topY0 && yZero <= topY1) {
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.beginPath();
-    ctx.moveTo(padL, yZero);
-    ctx.lineTo(w - padR, yZero);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-
-  ctx.fillStyle = "rgba(232,238,252,0.70)";
-  ctx.fillText(`${topRange.max.toFixed(1)} kn`, 6, topY0 + 10);
-  ctx.fillText(`${topRange.min.toFixed(1)}`, 6, topY1 - 2);
-  ctx.fillText("SOG / CMG", padL, topY0 + 10);
-
-  const sogSeries = win.map((p) => ({ sec: p.sec, v: p.sog }));
-  const cmgSeries = win.map((p) => ({ sec: p.sec, v: p.cmg }));
-  _drawSeries(ctx, sogSeries, (p) => xOf(p.sec), yTop, "#4ea1ff");
-  _drawSeries(ctx, cmgSeries, (p) => xOf(p.sec), yTop, "#ffcc66");
-
-  // Panel 2: Heading (deg, unwrapped)
-  let botMin = 0;
-  let botMax = 0;
-  let hadBot = false;
-  for (const p of win) {
-    if (!Number.isFinite(p.hdg)) continue;
-    if (!hadBot) {
-      botMin = p.hdg;
-      botMax = p.hdg;
-      hadBot = true;
-    } else {
-      botMin = Math.min(botMin, p.hdg);
-      botMax = Math.max(botMax, p.hdg);
-    }
-  }
-  if (!hadBot) {
-    botMin = 0;
-    botMax = 360;
-  }
-  const botRange = _niceRange(botMin, botMax, 5.0);
-  const botDen = Math.max(0.001, botRange.max - botRange.min);
-  const yBot = (v) => botY1 - ((v - botRange.min) / botDen) * botH;
-
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  for (let i = 0; i <= 3; i++) {
-    const y = botY0 + (i / 3.0) * botH;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(w - padR, y);
-    ctx.stroke();
-  }
-
-  const mod360 = (v) => ((v % 360.0) + 360.0) % 360.0;
-  ctx.fillStyle = "rgba(232,238,252,0.70)";
-  ctx.fillText(`${mod360(botRange.max).toFixed(0)}°`, 8, botY0 + 10);
-  ctx.fillText(`${mod360(botRange.min).toFixed(0)}°`, 8, botY1 - 2);
-  ctx.fillText("HDG (mag)", padL, botY0 + 10);
-
-  const hdgSeries = win.map((p) => ({ sec: p.sec, v: p.hdg }));
-  _drawSeries(ctx, hdgSeries, (p) => xOf(p.sec), yBot, "#c084fc");
+  // Draw 3 panels
+  drawPanel(0, win.map(p => ({ sec: p.sec, v: p.sog })), "SOG", "#4ea1ff", 0, null, " kn");
+  drawPanel(1, win.map(p => ({ sec: p.sec, v: p.cmg })), "CMG", "#ffcc66", null, null, " kn");
+  drawPanel(2, win.map(p => ({ sec: p.sec, v: p.hdg })), "HDG", "#c084fc", null, null, "°");
 }
 
 function drawTrack() {
@@ -3716,7 +3715,13 @@ applyState(lastState);
 if (wsWanted) connectWs();
 window.addEventListener("resize", () => scheduleChartDraw());
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") setMapFullscreen(false);
+  if (e.key === "Escape") {
+    setMapFullscreen(false);
+    setPerfFullscreen(false);
+  }
+});
+els.perfFullscreen?.addEventListener("click", () => {
+  setPerfFullscreen(!perfFullscreenOn);
 });
 
 function initPersistenceUi() {
