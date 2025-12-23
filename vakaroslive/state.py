@@ -486,6 +486,10 @@ class AtlasState:
         raw_len = event.get("raw_len")
         cog_gps_deg: float | None = None
         if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            # Ignore (0,0) or near-zero - likely "No Fix" or garbage
+            if abs(lat) < 1e-4 and abs(lon) < 1e-4:
+                return False
+                
             self.latitude = float(lat)
             self.longitude = float(lon)
 

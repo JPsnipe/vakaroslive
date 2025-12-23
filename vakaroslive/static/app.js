@@ -310,18 +310,18 @@ function recDebugSnapshot() {
   try {
     ble = bleClient
       ? {
-          connected: !!bleClient.server?.connected,
-          rx_main: bleClient.rxMainCount || 0,
-          ok_main: bleClient.okMainCount || 0,
-          rx_compact: bleClient.rxCompactCount || 0,
-          ok_compact: bleClient.okCompactCount || 0,
-          last_main_len: bleClient.lastMainLen ?? null,
-          last_main_type: bleClient.lastMainType ?? null,
-          last_main_head_hex: bleClient.lastMainHeadHex ?? null,
-          last_compact_len: bleClient.lastCompactLen ?? null,
-          last_compact_type: bleClient.lastCompactType ?? null,
-          last_compact_head_hex: bleClient.lastCompactHeadHex ?? null,
-        }
+        connected: !!bleClient.server?.connected,
+        rx_main: bleClient.rxMainCount || 0,
+        ok_main: bleClient.okMainCount || 0,
+        rx_compact: bleClient.rxCompactCount || 0,
+        ok_compact: bleClient.okCompactCount || 0,
+        last_main_len: bleClient.lastMainLen ?? null,
+        last_main_type: bleClient.lastMainType ?? null,
+        last_main_head_hex: bleClient.lastMainHeadHex ?? null,
+        last_compact_len: bleClient.lastCompactLen ?? null,
+        last_compact_type: bleClient.lastCompactType ?? null,
+        last_compact_head_hex: bleClient.lastCompactHeadHex ?? null,
+      }
       : null;
   } catch {
     ble = null;
@@ -826,7 +826,7 @@ function targetLabelForId(id) {
               ? "Wing"
               : id === "reach"
                 ? "Reach"
-            : null;
+                : null;
 }
 
 function targetPointForId(id) {
@@ -2530,24 +2530,37 @@ function applyState(state) {
   if (typeof rawState.latitude === "number" && typeof rawState.longitude === "number") {
     const ts = rawState.last_event_ts_ms || Date.now();
     const next = { lat: rawState.latitude, lon: rawState.longitude };
-    const last = trackPoints.length ? trackPoints[trackPoints.length - 1] : null;
-    const lastTs = lastTrackTsMs;
 
-    if (last && typeof lastTs === "number") {
-      const dt = Math.max(0.001, (ts - lastTs) / 1000.0);
-      const distM = haversineM(last.lat, last.lon, next.lat, next.lon);
-      const speedKn = (distM / dt) * KNOTS_PER_MPS;
-      if (speedKn < 35) {
+    // Ignore near-zero - Africa issue
+    if (Math.abs(next.lat) < 1e-4 && Math.abs(next.lon) < 1e-4) {
+      // ignore
+    } else {
+      const last = trackPoints.length ? trackPoints[trackPoints.length - 1] : null;
+      const lastTs = lastTrackTsMs;
+
+      if (last && typeof lastTs === "number") {
+        const dt = Math.max(0.001, (ts - lastTs) / 1000.0);
+        const distM = haversineM(last.lat, last.lon, next.lat, next.lon);
+        const speedKn = (distM / dt) * KNOTS_PER_MPS;
+
+        if (speedKn < 35) {
+          trackPoints.push(next);
+          lastTrackTsMs = ts;
+        } else if (distM > 100 * 1000) {
+          // Massive jump (>100km): likely a reset from Africa/NoFix to valid position.
+          // Let's reset the track instead of ignoring forever.
+          trackPoints = [next];
+          lastTrackTsMs = ts;
+        }
+      } else {
         trackPoints.push(next);
         lastTrackTsMs = ts;
       }
-    } else {
-      trackPoints.push(next);
-      lastTrackTsMs = ts;
-    }
 
-    if (trackPoints.length > 120) trackPoints.shift();
+      if (trackPoints.length > 120) trackPoints.shift();
+    }
   }
+
   drawTrack();
   updateMarkStats();
   updateTargetStats();
@@ -2587,8 +2600,22 @@ function parseMainPacketInner(dataView) {
     const v = dataView.getFloat32(off, true);
     return Number.isFinite(v) ? v : null;
   };
-  const latitude = getF32(8);
-  const longitude = getF32(12);
+  let latitude = getF32(8);
+  let longitude = getF32(12);
+
+  // Discovery fallback for new firmware versions (if 0,0 at default offsets)
+  if ((latitude === null || Math.abs(latitude) < 1e-4) && (longitude === null || Math.abs(longitude) < 1e-4)) {
+    for (let off = 2; off <= len - 8; off++) {
+      const tl = getF32(off);
+      const to = getF32(off + 4);
+      if (tl && to && Math.abs(tl) > 35.0 && Math.abs(tl) < 65.0 && Math.abs(to) < 180.0) {
+        latitude = tl;
+        longitude = to;
+        break;
+      }
+    }
+  }
+
   const heading = getF32(16);
   const f4 = getF32(20);
   const f5 = getF32(24);
