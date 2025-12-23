@@ -2353,7 +2353,7 @@ function updateStartLineStats() {
   els.startSource.textContent = `Fuente: ${followAtlas ? "Atlas2" : "Manual"}`;
   if (els.toggleStartAuto) {
     const backendActive = !useLocalMarks && wsConn && wsConn.readyState === WebSocket.OPEN;
-    const bleActive = useLocalMarks && !!bleClient && !!bleClient.server?.connected;
+    const bleActive = useLocalMarks && supportsWebBluetooth();
     els.toggleStartAuto.disabled = !(backendActive || bleActive);
     els.toggleStartAuto.textContent = followAtlas ? "Auto Atlas2: ON" : "Auto Atlas2: OFF";
   }
@@ -2683,7 +2683,8 @@ class AtlasWebBleClient {
     this.pollInFlight = false;
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
-    this.lastCmdPollTs = 0;
+    this.cmdPollTimer = null;
+    this.cmdPollInFlight = false;
     this.noDataTimer = null;
 
     this.lastMainRxTs = 0;
@@ -2712,7 +2713,7 @@ class AtlasWebBleClient {
     if (!supportsWebBluetooth()) throw new Error("Web Bluetooth no disponible");
     this.lastMainTs = 0;
     this.lastCompactTs = 0;
-    this.lastCmdPollTs = 0;
+    this.cmdPollInFlight = false;
     this.lastMainRxTs = 0;
     this.lastCompactRxTs = 0;
     this.lastMainOkTs = 0;
@@ -2732,6 +2733,10 @@ class AtlasWebBleClient {
     if (this.noDataTimer) {
       clearTimeout(this.noDataTimer);
       this.noDataTimer = null;
+    }
+    if (this.cmdPollTimer) {
+      clearInterval(this.cmdPollTimer);
+      this.cmdPollTimer = null;
     }
     setBleUi(false, "Selecciona el Atlas 2…");
 
@@ -2820,6 +2825,7 @@ class AtlasWebBleClient {
 
       await this.startNotifications();
       this.startPolling();
+      this.startCmdPolling();
       this.startNoDataWatchdog();
       return;
     }
@@ -3077,7 +3083,6 @@ class AtlasWebBleClient {
       const now = Date.now();
       const staleMain = now - this.lastMainTs > 1200;
       const staleCompact = now - this.lastCompactTs > 1200;
-      const pollCmd = now - this.lastCmdPollTs > 1000;
       try {
         if (staleMain && this.mainChar) {
           const v = await this.mainChar.readValue();
@@ -3087,17 +3092,6 @@ class AtlasWebBleClient {
           const v = await this.compactChar.readValue();
           this.onCompact({ target: { value: v }, vklSource: "telemetry_compact_poll" });
         }
-        if (pollCmd) {
-          this.lastCmdPollTs = now;
-          if (this.cmd1Char) {
-            const v = await this.cmd1Char.readValue();
-            this.onCmd1({ target: { value: v }, vklSource: "command_1_poll" });
-          }
-          if (this.cmd2Char) {
-            const v = await this.cmd2Char.readValue();
-            this.onCmd2({ target: { value: v }, vklSource: "command_2_poll" });
-          }
-        }
       } catch {
         // ignore
       } finally {
@@ -3106,11 +3100,63 @@ class AtlasWebBleClient {
     }, 400);
   }
 
+  startCmdPolling() {
+    if (this.cmdPollTimer) return;
+    this.cmdPollTimer = setInterval(() => {
+      if (!this.server?.connected) return;
+      if (this.cmdPollInFlight) return;
+      if (!this.cmd1Char && !this.cmd2Char) return;
+      if (!useLocalMarks) return;
+
+      const marks = ensureMarksShape(localMarks || loadLocalMarks() || {});
+      if (!marks.start_line_follow_atlas) return;
+
+      this.cmdPollInFlight = true;
+      const reads = [];
+      if (this.cmd1Char) {
+        reads.push(
+          this.cmd1Char
+            .readValue()
+            .then((v) => {
+              this.onCmd1({ target: { value: v }, vklSource: "command_1_poll" });
+            })
+            .catch(() => {
+              this.cmd1Char = null;
+            }),
+        );
+      }
+      if (this.cmd2Char) {
+        reads.push(
+          this.cmd2Char
+            .readValue()
+            .then((v) => {
+              this.onCmd2({ target: { value: v }, vklSource: "command_2_poll" });
+            })
+            .catch(() => {
+              this.cmd2Char = null;
+            }),
+        );
+      }
+      if (!reads.length) {
+        this.cmdPollInFlight = false;
+        return;
+      }
+      Promise.allSettled(reads).finally(() => {
+        this.cmdPollInFlight = false;
+      });
+    }, 900);
+  }
+
   disconnect() {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.cmdPollTimer) {
+      clearInterval(this.cmdPollTimer);
+      this.cmdPollTimer = null;
+    }
+    this.cmdPollInFlight = false;
     if (this.noDataTimer) {
       clearTimeout(this.noDataTimer);
       this.noDataTimer = null;
@@ -3190,11 +3236,13 @@ function connectWs() {
 }
 
 function sendCmd(type, extra = {}) {
-  if (wsConn && wsConn.readyState === WebSocket.OPEN) {
-    wsConn.send(JSON.stringify({ type, ...extra }));
+  if (useLocalMarks) {
+    applyLocalCommand(type, extra);
     return;
   }
-  if (useLocalMarks) applyLocalCommand(type, extra);
+  if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+    wsConn.send(JSON.stringify({ type, ...extra }));
+  }
 }
 
 async function scanDevices() {

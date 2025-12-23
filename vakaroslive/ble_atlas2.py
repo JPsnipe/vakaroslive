@@ -219,22 +219,24 @@ class Atlas2BleClient:
                         }
                     )
 
-                def on_main(_: int, data: bytearray) -> None:
-                    raw = bytes(data)
-                    maybe_emit_start_line(raw, "telemetry_main_notify")
-                    parsed = parse_telemetry_main(raw)
-                    if not parsed:
-                        return
-                    self._emit(
-                        {
-                            "type": "telemetry_main",
-                            "ts_ms": int(time.time() * 1000),
-                            "raw_hex": raw.hex(),
-                            **parsed.__dict__,
-                        }
-                    )
+                def on_main(_: int, data: bytearray):
                     if self._loop is not None:
                         self._loop.call_soon_threadsafe(mark_data_received)
+                    raw = bytes(data)
+                    # Debug log to file
+                    with open("logs/raw_packets.log", "a") as f:
+                        f.write(f"MAIN: {raw.hex()}\n")
+                    
+                    parsed = parse_telemetry_main(raw)
+                    if parsed:
+                        self._emit(
+                            {
+                                "type": "telemetry_main",
+                                "ts_ms": int(time.time() * 1000),
+                                **parsed.__dict__,
+                            }
+                        )
+                    maybe_emit_start_line(raw, "telemetry_main_notify")
 
                 def on_compact(_: int, data: bytearray) -> None:
                     raw = bytes(data)

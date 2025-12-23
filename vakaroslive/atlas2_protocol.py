@@ -54,11 +54,27 @@ def parse_telemetry_main(data: bytes) -> TelemetryMain | None:
         return None
     if data[0] != 0x02:
         return None
+    
+    lat = _safe_f32(data, 8)
+    lon = _safe_f32(data, 12)
+    
+    # Discovery fallback for new firmware versions
+    if (lat is None or abs(lat) < 1e-4) and (lon is None or abs(lon) < 1e-4):
+        # Try finding ANY float pair that looks like coordinates
+        for off in range(2, len(data) - 8):
+            tl = _safe_f32(data, off)
+            to = _safe_f32(data, off+4)
+            if tl and to and 35.0 < abs(tl) < 65.0 and abs(to) < 180.0:
+                # Potential match
+                lat = tl
+                lon = to
+                break
+
     return TelemetryMain(
         msg_type=data[0],
         msg_subtype=data[1],
-        latitude=_safe_f32(data, 8),
-        longitude=_safe_f32(data, 12),
+        latitude=lat,
+        longitude=lon,
         heading_deg=_safe_f32(data, 16),
         field_4=_safe_f32(data, 20),
         field_5=_safe_f32(data, 24),
