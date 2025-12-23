@@ -2604,6 +2604,20 @@ function applyBlePartialState(partial) {
   if (useLocalMarks) {
     merged.marks = ensureMarksShape(localMarks || loadLocalMarks() || {});
   }
+
+  // Persistence management: triggering on connection status change
+  if (partial && partial.hasOwnProperty("connected")) {
+    const isConnected = !!partial.connected;
+    if (isConnected) {
+      if (els.bleWakeLock?.checked) wakeLockMgr.setRequested(true);
+      if (els.bleBackground?.checked) bgMgr.setRequested(true);
+    } else {
+      // Release on disconnect
+      wakeLockMgr.setRequested(false);
+      bgMgr.setRequested(false);
+    }
+  }
+
   applyState(merged);
 }
 
@@ -2755,12 +2769,15 @@ class WakeLockManager {
     try {
       this.lock = await navigator.wakeLock.request("screen");
       console.log("[WakeLock] Acquired");
+      recAdd("system", { event: "wakelock_acquired" });
       this.lock.addEventListener("release", () => {
         console.log("[WakeLock] Released by system");
+        recAdd("system", { event: "wakelock_released_by_system" });
         this.lock = null;
       });
     } catch (err) {
       console.error("[WakeLock] Failed to acquire:", err);
+      recAdd("system", { event: "wakelock_error", error: String(err) });
     }
   }
 
@@ -2769,6 +2786,7 @@ class WakeLockManager {
       await this.lock.release();
       this.lock = null;
       console.log("[WakeLock] Released manually");
+      recAdd("system", { event: "wakelock_released_manually" });
     }
   }
 
@@ -2811,8 +2829,10 @@ class BackgroundPersistenceManager {
       gain.connect(this.ctx.destination);
       this.osc.start();
       console.log("[BackgroundMode] Audio context started (silent)");
+      recAdd("system", { event: "bg_audio_started" });
     } catch (err) {
       console.error("[BackgroundMode] Failed to start:", err);
+      recAdd("system", { event: "bg_audio_error", error: String(err) });
     }
   }
 
@@ -2825,6 +2845,7 @@ class BackgroundPersistenceManager {
       try { this.ctx.close(); } catch { }
       this.ctx = null;
       console.log("[BackgroundMode] Audio context stopped");
+      recAdd("system", { event: "bg_audio_stopped" });
     }
   }
 }
@@ -3700,12 +3721,12 @@ window.addEventListener("keydown", (e) => {
 
 function initPersistenceUi() {
   els.bleWakeLock?.addEventListener("change", () => {
-    const active = !!lastState?.connected;
-    if (active) wakeLockMgr.setRequested(els.bleWakeLock.checked);
+    const isConnected = !!lastState?.connected;
+    wakeLockMgr.setRequested(els.bleWakeLock.checked && isConnected);
   });
   els.bleBackground?.addEventListener("change", () => {
-    const active = !!lastState?.connected;
-    if (active) bgMgr.setRequested(els.bleBackground.checked);
+    const isConnected = !!lastState?.connected;
+    bgMgr.setRequested(els.bleBackground.checked && isConnected);
   });
 }
 initPersistenceUi();
