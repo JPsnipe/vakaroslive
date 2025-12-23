@@ -86,6 +86,8 @@ const els = {
   dampingPitchValue: $("dampingPitchValue"),
   dampingPosition: $("dampingPosition"),
   dampingPositionValue: $("dampingPositionValue"),
+  bleWakeLock: $("bleWakeLock"),
+  bleBackground: $("bleBackground"),
 };
 
 let lastState = null;
@@ -121,7 +123,7 @@ const DAMPING_UI_DEFAULTS = {
 };
 const DAMPING_PROFILE = {
   heading: { tauMin: 1.2, tauMax: 9.0, noiseRange: 12 },
-  cog: { tauMin: 1.8, tauMax: 12.0, noiseRange: 20 },
+  cog: { tauMin: 0.2, tauMax: 0.5, noiseRange: 20 },
   sog: { tauMin: 0.8, tauMax: 6.0, noiseRange: 3 },
   heel: { tauMin: 0.6, tauMax: 2.5, noiseRange: 6 },
   pitch: { tauMin: 0.6, tauMax: 2.5, noiseRange: 6 },
@@ -171,6 +173,9 @@ let dampingState = {
   headingCos: null,
   cogSin: null,
   cogCos: null,
+  lastHdg: null,
+  lastHeel: null,
+  lastPitch: null,
 };
 
 // Grabación de sesión (raw + parseado) para depurar el protocolo.
@@ -982,7 +987,12 @@ function applyDynamicDamping(state) {
 
   const latRaw = typeof state?.latitude === "number" ? state.latitude : null;
   const lonRaw = typeof state?.longitude === "number" ? state.longitude : null;
-  const posTau = tauForSpeed(DAMPING_PROFILE.position, sogRaw);
+  const posTauBase = tauForSpeed(DAMPING_PROFILE.position, sogRaw);
+
+  // Dynamic Damping Bypass: Si hay transitorio (Giro/Escora), tau -> 0.05
+  const tIdx = state.transient_idx || 0;
+  const posTau = tIdx > 0.8 ? 0.05 : posTauBase;
+
   const lat = dampScalar(dampingState.lat, latRaw, dt, posTau, null, posScale);
   const lon = dampScalar(dampingState.lon, lonRaw, dt, posTau, null, posScale);
   if (Number.isFinite(lat) && Number.isFinite(lon)) {
@@ -1501,17 +1511,21 @@ function blendAngleDeg(aDeg, bDeg, weightB) {
   return normDeg((Math.atan2(y, x) * 180.0) / Math.PI);
 }
 
-function cogGpsWeightForSog(sogKn) {
+function cogGpsWeightForSog(sogKn, transientIdx = 0) {
   if (typeof sogKn !== "number" || !Number.isFinite(sogKn)) return 0.5;
   const sogLow = 1.0;
   const sogHigh = 3.0;
-  const alphaLow = 0.2;
-  const alphaHigh = 0.8;
+
+  // Si estamos maniobrando brusco (transientIdx > 1), el peso del GPS baja casi a cero.
+  // Fiarse al 100% de la inercia (Compass) durante el giro.
+  const baseAlphaLow = transientIdx > 0.8 ? 0.01 : 0.05;
+  const baseAlphaHigh = transientIdx > 0.8 ? 0.05 : 0.3;
+
   const t = clamp((sogKn - sogLow) / (sogHigh - sogLow), 0.0, 1.0);
-  return alphaLow + (alphaHigh - alphaLow) * t;
+  return baseAlphaLow + (baseAlphaHigh - baseAlphaLow) * t;
 }
 
-function updateCogFusion({ tsMs, sogKn, hdgDeg, cogGpsDeg }) {
+function updateCogFusion({ tsMs, sogKn, hdgDeg, cogGpsDeg, transientIdx = 0 }) {
   const moving = typeof sogKn === "number" && Number.isFinite(sogKn) && sogKn > 0.3;
   const recentlyUpdated =
     typeof cogFusion.lastUpdateTsMs === "number" && tsMs - cogFusion.lastUpdateTsMs < 7000;
@@ -1532,7 +1546,7 @@ function updateCogFusion({ tsMs, sogKn, hdgDeg, cogGpsDeg }) {
 
   let fused = predicted;
   if (typeof cogGpsDeg === "number") {
-    const wGps = cogGpsWeightForSog(sogKn);
+    const wGps = cogGpsWeightForSog(sogKn, transientIdx);
     fused = typeof predicted === "number" ? blendAngleDeg(predicted, cogGpsDeg, wGps) : cogGpsDeg;
     if (typeof fused === "number") {
       cogFusion.cogDeg = fused;
@@ -1593,7 +1607,7 @@ function deriveSogCogInPlace(state) {
   }
 
   fixHistory.push({ tsMs, lat: state.latitude, lon: state.longitude });
-  const cutoff = tsMs - 4000;
+  const cutoff = tsMs - 2000; // Reducido de 4s a 2s para menos lag en giros
   while (fixHistory.length > 2 && fixHistory[0].tsMs < cutoff) fixHistory.shift();
 
   let cogGps = null;
@@ -1626,7 +1640,23 @@ function deriveSogCogInPlace(state) {
     typeof state?.sog_knots === "number" && Number.isFinite(state.sog_knots)
       ? state.sog_knots
       : lastDerivedSogKn;
-  const fused = updateCogFusion({ tsMs, sogKn: sogFusionNow, hdgDeg: hdg, cogGpsDeg: cogGps });
+
+  // Calculate Rates for 6-DOF Transient index
+  const dtSec = (tsMs - (dampingState.prevTs || tsMs)) / 1000.0;
+  dampingState.prevTs = tsMs;
+  let tIdx = 0;
+  if (dtSec > 0.01) {
+    const rot = Math.abs(angleDiffDeg(hdg, dampingState.lastHdg || hdg)) / dtSec;
+    const roh = Math.abs((state.main_field_5 || 0) - (dampingState.lastHeel || (state.main_field_5 || 0))) / dtSec;
+    const rop = Math.abs((state.main_field_4 || 0) - (dampingState.lastPitch || (state.main_field_4 || 0))) / dtSec;
+    tIdx = Math.max(rot / 12.0, roh / 8.0, rop / 6.0);
+    dampingState.lastHdg = hdg;
+    dampingState.lastHeel = state.main_field_5;
+    dampingState.lastPitch = state.main_field_4;
+  }
+  state.transient_idx = tIdx;
+
+  const fused = updateCogFusion({ tsMs, sogKn: sogFusionNow, hdgDeg: hdg, cogGpsDeg: cogGps, transientIdx: tIdx });
   if (!backendActive || typeof state.cog_deg !== "number") state.cog_deg = fused;
 }
 
@@ -2698,6 +2728,110 @@ function parseCompactPacket(dataView) {
   return null;
 }
 
+
+/**
+ * Keeps the screen awake if supported and requested.
+ */
+class WakeLockManager {
+  constructor() {
+    this.lock = null;
+    this.requested = false;
+    this._onVisibilityChange = this._onVisibilityChange.bind(this);
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
+  }
+
+  async setRequested(requested) {
+    this.requested = requested;
+    if (requested) {
+      await this.acquire();
+    } else {
+      await this.release();
+    }
+  }
+
+  async acquire() {
+    if (!this.requested || !("wakeLock" in navigator)) return;
+    if (this.lock) return;
+    try {
+      this.lock = await navigator.wakeLock.request("screen");
+      console.log("[WakeLock] Acquired");
+      this.lock.addEventListener("release", () => {
+        console.log("[WakeLock] Released by system");
+        this.lock = null;
+      });
+    } catch (err) {
+      console.error("[WakeLock] Failed to acquire:", err);
+    }
+  }
+
+  async release() {
+    if (this.lock) {
+      await this.lock.release();
+      this.lock = null;
+      console.log("[WakeLock] Released manually");
+    }
+  }
+
+  async _onVisibilityChange() {
+    if (document.visibilityState === "visible" && this.requested) {
+      await this.acquire();
+    }
+  }
+}
+
+/**
+ * Uses a silent audio loop to keep the browser process active in the background.
+ */
+class BackgroundPersistenceManager {
+  constructor() {
+    this.ctx = null;
+    this.osc = null;
+    this.requested = false;
+  }
+
+  setRequested(requested) {
+    this.requested = requested;
+    if (requested) {
+      this.start();
+    } else {
+      this.stop();
+    }
+  }
+
+  start() {
+    if (!this.requested) return;
+    if (this.ctx) return;
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // Oscillator with 0 gain is enough to signal "active media playback"
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      this.osc = this.ctx.createOscillator();
+      this.osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      this.osc.start();
+      console.log("[BackgroundMode] Audio context started (silent)");
+    } catch (err) {
+      console.error("[BackgroundMode] Failed to start:", err);
+    }
+  }
+
+  stop() {
+    if (this.osc) {
+      try { this.osc.stop(); } catch { }
+      this.osc = null;
+    }
+    if (this.ctx) {
+      try { this.ctx.close(); } catch { }
+      this.ctx = null;
+      console.log("[BackgroundMode] Audio context stopped");
+    }
+  }
+}
+
+const wakeLockMgr = new WakeLockManager();
+const bgMgr = new BackgroundPersistenceManager();
+
 class AtlasWebBleClient {
   constructor() {
     this.device = null;
@@ -2854,6 +2988,11 @@ class AtlasWebBleClient {
       this.startPolling();
       this.startCmdPolling();
       this.startNoDataWatchdog();
+
+      // Persistence - Start if requested
+      await wakeLockMgr.setRequested(els.bleWakeLock?.checked);
+      bgMgr.setRequested(els.bleBackground?.checked);
+
       return;
     }
 
@@ -3226,6 +3365,10 @@ class AtlasWebBleClient {
     this.cmd2Char = null;
     setBleUi(false, "—");
     applyBlePartialState({ connected: false, last_error: null });
+
+    // Persistence - Stop on disconnect
+    wakeLockMgr.setRequested(false);
+    bgMgr.setRequested(false);
   }
 }
 
@@ -3554,3 +3697,15 @@ window.addEventListener("resize", () => scheduleChartDraw());
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") setMapFullscreen(false);
 });
+
+function initPersistenceUi() {
+  els.bleWakeLock?.addEventListener("change", () => {
+    const active = !!lastState?.connected;
+    if (active) wakeLockMgr.setRequested(els.bleWakeLock.checked);
+  });
+  els.bleBackground?.addEventListener("change", () => {
+    const active = !!lastState?.connected;
+    if (active) bgMgr.setRequested(els.bleBackground.checked);
+  });
+}
+initPersistenceUi();

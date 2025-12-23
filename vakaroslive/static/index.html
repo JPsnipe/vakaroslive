@@ -20,6 +20,16 @@
         <button id="bleDisconnect" class="btn btn--ghost btn--sm" disabled>Desconectar</button>
         <button id="recToggle" class="btn btn--ghost btn--sm" type="button" title="Grabar sesión (raw + parseado)">Grabar</button>
         <button id="recDownload" class="btn btn--ghost btn--sm" type="button" disabled>Descargar</button>
+        <div class="header__settings">
+          <label class="toggle" title="Mantiene la pantalla encendida (Wake Lock)">
+            <input type="checkbox" id="bleWakeLock" checked />
+            <span class="toggle__label">Pantalla ON</span>
+          </label>
+          <label class="toggle" title="Evita que el móvil congele la app al apagar la pantalla (Audio persistence)">
+            <input type="checkbox" id="bleBackground" checked />
+            <span class="toggle__label">2º Plano</span>
+          </label>
+        </div>
         <span class="muted" id="bleInfo">-</span>
       </div>
       <div id="status" class="status status--disconnected">Desconectado</div>
