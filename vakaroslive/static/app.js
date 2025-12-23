@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-const APP_VERSION = "v26";
+const APP_VERSION = "v27";
 
 const els = {
   status: $("status"),
