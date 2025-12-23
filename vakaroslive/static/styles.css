@@ -666,7 +666,29 @@ body.perf-fullscreen [data-card="race"] .card__title {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 10;
+  display: flex !important;
+  align-items: center !important;
+}
+
+body.perf-fullscreen [data-card="race"] .card__title button#perfFullscreen {
+  background: #ff4757 !important;
+  color: white !important;
+  font-weight: 800 !important;
+  border: none !important;
+  padding: 8px 16px !important;
+  border-radius: 6px !important;
+  box-shadow: 0 0 15px rgba(255, 71, 87, 0.5) !important;
+  text-transform: uppercase !important;
+  font-size: 13px !important;
+  cursor: pointer !important;
+  margin-left: auto !important;
+  display: inline-block !important;
+  visibility: visible !important;
+}
+
+body.perf-fullscreen [data-card="race"] .card__title .card-toggle {
+  display: none !important;
 }
 
 body.perf-fullscreen [data-card="race"] .chart {
