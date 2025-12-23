@@ -89,6 +89,8 @@ const els = {
   bleWakeLock: $("bleWakeLock"),
   bleBackground: $("bleBackground"),
   perfFullscreen: $("perfFullscreen"),
+  chartHorizon: $("chartHorizon"),
+  chartHorizonValue: $("chartHorizonValue"),
 };
 
 let lastState = null;
@@ -106,7 +108,7 @@ let trackPoints = []; // [{lat, lon}]
 let lastTrackTsMs = null;
 
 // Rendimiento (1 Hz)
-const CHART_WINDOW_S = 120;
+let CHART_WINDOW_S = 120;
 const CHART_ALPHA = 0.35; // EMA (~5s)
 const KNOTS_PER_MPS = 1.9438444924406048;
 const DAMPING_KEY = "vkl_damping_scale_v1";
@@ -1749,8 +1751,10 @@ function setPerfFullscreen(on) {
     document.body.classList.add("perf-fullscreen");
     document.body.classList.remove("map-fullscreen");
     mapFullscreenOn = false;
+    if (els.perfFullscreen) els.perfFullscreen.textContent = "Cerrar";
   } else {
     document.body.classList.remove("perf-fullscreen");
+    if (els.perfFullscreen) els.perfFullscreen.textContent = "Gráfica Full";
   }
   scheduleChartDraw();
 }
@@ -3723,6 +3727,17 @@ window.addEventListener("keydown", (e) => {
 });
 els.perfFullscreen?.addEventListener("click", () => {
   setPerfFullscreen(!perfFullscreenOn);
+});
+
+els.chartHorizon?.addEventListener("input", () => {
+  const val = parseInt(els.chartHorizon.value, 10);
+  CHART_WINDOW_S = val;
+  if (els.chartHorizonValue) {
+    const min = Math.floor(val / 60);
+    const sec = val % 60;
+    els.chartHorizonValue.textContent = sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+  }
+  scheduleChartDraw();
 });
 
 function initPersistenceUi() {

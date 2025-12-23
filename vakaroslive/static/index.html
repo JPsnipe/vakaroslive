@@ -140,10 +140,17 @@
       </div>
       <div class="chart">
         <canvas id="perfChart" class="chart__canvas"></canvas>
-        <div id="perfLegend" class="chart__legend muted">
-          <span class="legend legend--sog">SOG</span>
-          <span class="legend legend--cmg">CMG</span>
-          <span class="legend legend--hdg">HDG</span>
+        <div class="chart__controls row">
+          <div class="expert-label" style="display:flex; align-items:center; gap:8px">
+            <span class="muted" style="text-transform:uppercase; font-size:10px; font-weight:700">Horizonte</span>
+            <input id="chartHorizon" type="range" min="60" max="600" step="30" value="120" style="width:120px" />
+            <span id="chartHorizonValue" class="muted mono">2m</span>
+          </div>
+          <div id="perfLegend" class="chart__legend muted" style="margin-top:0; margin-left:auto">
+            <span class="legend legend--sog">SOG</span>
+            <span class="legend legend--cmg">CMG</span>
+            <span class="legend legend--hdg">HDG</span>
+          </div>
         </div>
       </div>
     </section>
