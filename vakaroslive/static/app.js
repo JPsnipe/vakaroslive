@@ -88,6 +88,7 @@ const els = {
   dampingPositionValue: $("dampingPositionValue"),
   bleWakeLock: $("bleWakeLock"),
   bleBackground: $("bleBackground"),
+  perfFullscreen: $("perfFullscreen"),
 };
 
 let lastState = null;
