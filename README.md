@@ -77,3 +77,16 @@ python -m vakaroslive --host 0.0.0.0 --port 8766 --https --certfile cert.pem --k
 Abre en el móvil `https://IP_DEL_PC:8766/` y pulsa **Conectar BLE (móvil)**.
 
 Nota: si el certificado no es confiable para Android/Chrome, Web Bluetooth seguirá bloqueado aunque aceptes el aviso.
+
+## Replay 2.0 (reproducir sesiones grabadas)
+
+1) Graba una sesión con **Grabar** → **Parar** → **Descargar** (`vakaroslive_session_*.json`).
+2) Pulsa **Replay** y elige el `.json`. Aparece una barra inferior con:
+   - ▶/❚❚, **-10s / +10s**, velocidad **0.5×–20×** y barra de búsqueda (seek).
+   - Atajos: `Espacio` play/pausa, `←/→` ±10 s.
+   - **Fuente**:
+     - *BLE raw (re-decodificar)*: vuelve a pasar los paquetes BLE crudos por el parser **actual** (ideal para validar cambios de protocolo, filtros, SOG/COG, línea de salida…).
+     - *Backend (WS)*: re-aplica los estados que llegaron del servidor Python.
+     - *Estado grabado*: re-aplica los snapshots del dashboard.
+3) El reloj es virtual (usa los timestamps de la grabación), así que SOG/COG derivados, track y gráfica son coherentes a cualquier velocidad. Los huecos largos (>5 s) se saltan.
+4) Durante el replay se ignoran BLE/WS en vivo y no se graba. Al salir (✕) se restauran tus marcas locales.

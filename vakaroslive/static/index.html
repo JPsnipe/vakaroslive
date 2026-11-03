@@ -13,7 +13,7 @@
 
 <body>
   <header class="header">
-    <div class="title">VakarosLive <span id="appVersion" class="title__version">v29</span></div>
+    <div class="title">VakarosLive <span id="appVersion" class="title__version">v30</span></div>
     <div class="header__right">
       <div class="header__ble">
         <button id="bleConnect" class="btn btn--sm">Conectar BLE</button>
@@ -21,6 +21,9 @@
         <button id="recToggle" class="btn btn--ghost btn--sm" type="button"
           title="Grabar sesión (raw + parseado)">Grabar</button>
         <button id="recDownload" class="btn btn--ghost btn--sm" type="button" disabled>Descargar</button>
+        <button id="replayOpen" class="btn btn--ghost btn--sm" type="button"
+          title="Reproducir una sesión grabada (.json)">Replay</button>
+        <input id="replayFile" type="file" accept=".json,application/json" hidden />
         <div class="header__settings">
           <label class="toggle" title="Mantiene la pantalla encendida (Wake Lock)">
             <input type="checkbox" id="bleWakeLock" checked />
@@ -272,8 +275,34 @@
     </section>
   </main>
 
+  <div id="replayBar" class="replay" hidden>
+    <div class="replay__row">
+      <span class="replay__badge">REPLAY</span>
+      <button id="replayBack" class="btn btn--ghost btn--sm" type="button" title="Retroceder 10 s">-10s</button>
+      <button id="replayPlay" class="btn btn--sm replay__play" type="button" title="Play/Pausa (espacio)">▶</button>
+      <button id="replayFwd" class="btn btn--ghost btn--sm" type="button" title="Avanzar 10 s">+10s</button>
+      <select id="replaySpeed" class="replay__select" title="Velocidad">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="5">5×</option>
+        <option value="10">10×</option>
+        <option value="20">20×</option>
+      </select>
+      <select id="replayMode" class="replay__select" title="Fuente de datos">
+        <option value="raw">BLE raw (re-decodificar)</option>
+        <option value="ws">Backend (WS)</option>
+        <option value="dashboard">Estado grabado</option>
+      </select>
+      <span id="replayTime" class="mono replay__time">00:00 / 00:00</span>
+      <button id="replayClose" class="btn btn--ghost btn--sm" type="button" title="Salir del replay">✕</button>
+    </div>
+    <input id="replaySeek" class="replay__seek" type="range" min="0" max="1000" step="1" value="0" />
+    <div id="replayInfo" class="muted replay__info">—</div>
+  </div>
+
   <script src="./leaflet.js"></script>
-  <script src="./app.js?v=29"></script>
+  <script src="./app.js?v=30"></script>
 </body>
 
 </html>

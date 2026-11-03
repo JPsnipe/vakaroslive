@@ -709,3 +709,78 @@ body.perf-fullscreen [data-card="race"] .chart__canvas {
 body.perf-fullscreen [data-card="race"] :not(.card__title):not(.chart):not(.chart *) {
   display: none;
 }
+/* Replay 2.0 */
+.replay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3000;
+  background: rgba(11, 18, 32, 0.96);
+  border-top: 2px solid var(--warn);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  backdrop-filter: blur(6px);
+}
+
+.replay[hidden] {
+  display: none;
+}
+
+.replay__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.replay__badge {
+  background: var(--warn);
+  color: #1a1200;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.replay__play {
+  min-width: 44px;
+}
+
+.replay__select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid rgba(159, 176, 209, 0.3);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: var(--control-font);
+}
+
+.replay__time {
+  margin-left: auto;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay__seek {
+  width: 100%;
+  accent-color: var(--warn);
+}
+
+.replay__info {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.is-replay {
+  padding-bottom: 130px;
+}
+
+body.is-replay .status {
+  outline: 2px solid var(--warn);
+}

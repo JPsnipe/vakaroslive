@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-const APP_VERSION = "v29";
+const APP_VERSION = "v30";
 
 const els = {
   status: $("status"),
@@ -191,6 +191,9 @@ let sessionRec = {
   maxEntries: 20000,
 };
 
+// Replay 2.0: estado global (se declara aquí para que los guards lo vean desde el inicio).
+let replay = { active: false, dispatching: false };
+
 function recSetActive(active) {
   sessionRec.active = !!active;
   if (sessionRec.active) {
@@ -205,7 +208,7 @@ function recSetActive(active) {
 }
 
 function recAdd(kind, payload) {
-  if (!sessionRec.active) return;
+  if (!sessionRec.active || replay.active) return;
   try {
     sessionRec.entries.push({ ts_ms: Date.now(), kind, ...(payload || {}) });
     if (sessionRec.entries.length > sessionRec.maxEntries) sessionRec.entries.shift();
@@ -2604,13 +2607,15 @@ function applyState(state) {
 }
 
 function applyBlePartialState(partial) {
+  // Durante el replay solo se aceptan datos que vienen del propio replay.
+  if (replay.active && !replay.dispatching) return;
   const merged = { ...(lastState || {}), ...(partial || {}) };
   if (useLocalMarks) {
     merged.marks = ensureMarksShape(localMarks || loadLocalMarks() || {});
   }
 
   // Persistence management: triggering on connection status change
-  if (partial && partial.hasOwnProperty("connected")) {
+  if (!replay.active && partial && partial.hasOwnProperty("connected")) {
     const isConnected = !!partial.connected;
     if (isConnected) {
       if (els.bleWakeLock?.checked) wakeLockMgr.setRequested(true);
@@ -3029,6 +3034,7 @@ class AtlasWebBleClient {
   }
 
   onMain(evt) {
+    if (replay.active && !this.isReplay) return;
     const dv = evt.target.value;
     const source = evt?.vklSource || "telemetry_main_notify";
     const now = Date.now();
@@ -3103,6 +3109,7 @@ class AtlasWebBleClient {
   }
 
   onCompact(evt) {
+    if (replay.active && !this.isReplay) return;
     const dv = evt.target.value;
     const source = evt?.vklSource || "telemetry_compact_notify";
     const now = Date.now();
@@ -3154,6 +3161,7 @@ class AtlasWebBleClient {
   }
 
   onCmd1(evt) {
+    if (replay.active && !this.isReplay) return;
     const dv = evt.target.value;
     const source = evt?.vklSource || "command_1_notify";
     if (sessionRec.active) {
@@ -3167,6 +3175,7 @@ class AtlasWebBleClient {
   }
 
   onCmd2(evt) {
+    if (replay.active && !this.isReplay) return;
     const dv = evt.target.value;
     const source = evt?.vklSource || "command_2_notify";
     if (sessionRec.active) {
@@ -3423,6 +3432,7 @@ function connectWs() {
     try {
       const msg = JSON.parse(evt.data);
       if (sessionRec.active) recAdd("ws_msg", { msg });
+      if (replay.active) return; // durante el replay se ignora el backend en vivo
       if (msg.type === "state" && msg.state) applyState(msg.state);
     } catch {
       // ignore
@@ -3751,3 +3761,416 @@ function initPersistenceUi() {
   });
 }
 initPersistenceUi();
+
+// ---------------------------------------------------------------------------
+// Replay 2.0
+// Reproduce una sesión grabada con "Grabar" → "Descargar".
+//  - raw:       re-decodifica los paquetes BLE crudos (ble_rx) con el parser ACTUAL,
+//               así los cambios de protocolo/filtros se pueden validar con datos reales.
+//  - ws:        re-aplica los estados que llegaron del backend Python (ws_msg).
+//  - dashboard: re-aplica los snapshots de estado grabados.
+// El tiempo es virtual: Date.now() se sustituye por el ts de la grabación mientras se
+// despacha cada entrada, de modo que SOG/COG derivados, gráficas y track son coherentes
+// a cualquier velocidad.
+// ---------------------------------------------------------------------------
+const REPLAY_SPEEDS = [0.5, 1, 2, 5, 10, 20];
+const REPLAY_TICK_MS = 50;
+const REPLAY_MAX_PER_TICK = 4000;
+
+const replayEls = {
+  open: document.getElementById("replayOpen"),
+  file: document.getElementById("replayFile"),
+  bar: document.getElementById("replayBar"),
+  play: document.getElementById("replayPlay"),
+  back: document.getElementById("replayBack"),
+  fwd: document.getElementById("replayFwd"),
+  speed: document.getElementById("replaySpeed"),
+  mode: document.getElementById("replayMode"),
+  time: document.getElementById("replayTime"),
+  seek: document.getElementById("replaySeek"),
+  info: document.getElementById("replayInfo"),
+  close: document.getElementById("replayClose"),
+};
+
+Object.assign(replay, {
+  fileName: null,
+  meta: null,
+  allEntries: [],
+  entries: [], // entradas filtradas para el modo actual
+  mode: "raw",
+  idx: 0,
+  t0: 0,
+  t1: 0,
+  vt: 0, // tiempo virtual (ms epoch de la grabación)
+  playing: false,
+  speed: 1,
+  timer: null,
+  lastTickReal: 0,
+  seeking: false,
+  client: null,
+  saved: null, // estado previo al replay para restaurarlo al salir
+  lastSystem: null,
+  stats: { main: 0, compact: 0, cmd: 0, states: 0 },
+});
+
+function replayB64ToDataView(b64) {
+  try {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return new DataView(u8.buffer);
+  } catch {
+    return null;
+  }
+}
+
+function replayFmtClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(sec).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function replayModeAvailability(entries) {
+  const has = { raw: false, ws: false, dashboard: false };
+  for (const e of entries) {
+    if (e.kind === "ble_rx" && e.raw_b64) has.raw = true;
+    else if (e.kind === "ws_msg" && e.msg?.type === "state") has.ws = true;
+    else if (e.kind === "dashboard" && e.state) has.dashboard = true;
+    if (has.raw && has.ws && has.dashboard) break;
+  }
+  return has;
+}
+
+function replayFilterEntries(mode) {
+  const all = replay.allEntries;
+  if (mode === "raw") return all.filter((e) => (e.kind === "ble_rx" && e.raw_b64) || e.kind === "system");
+  if (mode === "ws") return all.filter((e) => (e.kind === "ws_msg" && e.msg?.type === "state") || e.kind === "system");
+  return all.filter((e) => (e.kind === "dashboard" && e.state) || e.kind === "system");
+}
+
+function replayInitialMarks() {
+  // Marcas de la sesión grabada (primer snapshot que las tenga); si no, las locales actuales.
+  for (const e of replay.allEntries) {
+    const m = e.kind === "dashboard" ? e.state?.marks : e.kind === "ws_msg" ? e.msg?.state?.marks : null;
+    if (m && typeof m === "object") return ensureMarksShape(recClone(m));
+  }
+  return ensureMarksShape(recClone(replay.saved?.localMarks || {}));
+}
+
+function replayResetDerivedState() {
+  resetPerfSeries();
+  trackPoints = [];
+  lastTrackTsMs = null;
+  for (const k of Object.keys(dampingState)) dampingState[k] = null;
+  replay.client = new AtlasWebBleClient();
+  replay.client.isReplay = true;
+  replay.client.device = { name: `Replay: ${replay.fileName || "sesión"}` };
+  replay.lastSystem = null;
+  replay.stats = { main: 0, compact: 0, cmd: 0, states: 0 };
+
+  if (replay.mode === "raw") {
+    useLocalMarks = true;
+    localMarks = replayInitialMarks();
+    applyLocalMarksToUi();
+  } else {
+    useLocalMarks = false;
+  }
+}
+
+function replayDispatch(entry) {
+  const realNow = Date.now;
+  const ts = entry.ts_ms;
+  Date.now = () => ts;
+  replay.dispatching = true;
+  try {
+    if (entry.kind === "system") {
+      replay.lastSystem = entry.event || null;
+      return;
+    }
+    if (entry.kind === "ble_rx") {
+      const dv = replayB64ToDataView(entry.raw_b64);
+      if (!dv) return;
+      const evt = { target: { value: dv }, vklSource: `replay_${entry.chan}` };
+      if (entry.chan === "main") {
+        replay.stats.main++;
+        replay.client.onMain(evt);
+      } else if (entry.chan === "compact") {
+        replay.stats.compact++;
+        replay.client.onCompact(evt);
+      } else if (entry.chan === "command_1") {
+        replay.stats.cmd++;
+        replay.client.onCmd1(evt);
+      } else if (entry.chan === "command_2") {
+        replay.stats.cmd++;
+        replay.client.onCmd2(evt);
+      }
+      return;
+    }
+    const st = entry.kind === "ws_msg" ? entry.msg?.state : entry.state;
+    if (st) {
+      replay.stats.states++;
+      const clone = recClone(st);
+      if (entry.kind === "dashboard" && typeof clone.last_event_ts_ms !== "number") clone.last_event_ts_ms = ts;
+      applyState(clone);
+    }
+  } catch (err) {
+    console.warn("replay dispatch error", err);
+  } finally {
+    replay.dispatching = false;
+    Date.now = realNow;
+  }
+}
+
+function replayAdvanceTo(targetVt) {
+  const list = replay.entries;
+  let n = 0;
+  while (replay.idx < list.length && list[replay.idx].ts_ms <= targetVt && n < REPLAY_MAX_PER_TICK) {
+    replayDispatch(list[replay.idx]);
+    replay.idx++;
+    n++;
+  }
+  // Si nos hemos quedado cortos por el límite por tick, no adelantamos el reloj más allá.
+  if (n >= REPLAY_MAX_PER_TICK && replay.idx < list.length) {
+    replay.vt = Math.min(targetVt, list[replay.idx].ts_ms);
+  } else {
+    replay.vt = targetVt;
+  }
+}
+
+function replaySeekTo(targetVt) {
+  targetVt = clamp(targetVt, replay.t0, replay.t1);
+  // El estado (filtros, track, gráfica) es acumulativo: se reinicia y se "precalienta"
+  // reproduciendo una ventana previa al punto de destino.
+  const warmupMs = Math.min(600, Math.max(60, CHART_WINDOW_S)) * 1000;
+  replayResetDerivedState();
+  const from = targetVt - warmupMs;
+  const list = replay.entries;
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].ts_ms < from) lo = mid + 1;
+    else hi = mid;
+  }
+  replay.idx = lo;
+  while (replay.idx < list.length && list[replay.idx].ts_ms <= targetVt) {
+    replayDispatch(list[replay.idx]);
+    replay.idx++;
+  }
+  replay.vt = targetVt;
+  replayUpdateUi();
+}
+
+function replayTick() {
+  if (!replay.active || !replay.playing) return;
+  const now = performance.now();
+  const dtReal = Math.min(1000, now - replay.lastTickReal);
+  replay.lastTickReal = now;
+  let target = replay.vt + dtReal * replay.speed;
+
+  // Salta huecos largos (p.ej. desconexiones) para no esperar en vacío.
+  const next = replay.entries[replay.idx];
+  if (next && next.ts_ms - replay.vt > 5000) target = Math.max(target, next.ts_ms - 250);
+
+  replayAdvanceTo(Math.min(target, replay.t1));
+  replayUpdateUi();
+  if (replay.idx >= replay.entries.length || replay.vt >= replay.t1) replaySetPlaying(false);
+}
+
+function replaySetPlaying(on) {
+  replay.playing = !!on && replay.active;
+  if (replay.playing && replay.vt >= replay.t1) replaySeekTo(replay.t0);
+  if (replayEls.play) replayEls.play.textContent = replay.playing ? "❚❚" : "▶";
+  if (replay.timer) {
+    clearInterval(replay.timer);
+    replay.timer = null;
+  }
+  if (replay.playing) {
+    replay.lastTickReal = performance.now();
+    replay.timer = setInterval(replayTick, REPLAY_TICK_MS);
+  }
+}
+
+function replayUpdateUi() {
+  const dur = Math.max(0, replay.t1 - replay.t0);
+  const pos = Math.max(0, replay.vt - replay.t0);
+  setText(replayEls.time, `${replayFmtClock(pos)} / ${replayFmtClock(dur)}`);
+  if (replayEls.seek && !replay.seeking) {
+    replayEls.seek.value = String(dur > 0 ? Math.round((pos / dur) * 1000) : 0);
+  }
+  const clock = replay.vt ? new Date(replay.vt).toLocaleTimeString() : "—";
+  const st = replay.stats;
+  const counts =
+    replay.mode === "raw"
+      ? `main ${st.main} · compact ${st.compact} · cmd ${st.cmd}`
+      : `estados ${st.states}`;
+  const sys = replay.lastSystem ? ` · último evento: ${replay.lastSystem}` : "";
+  const ver = replay.meta?.appVersion ? ` · grabado con ${replay.meta.appVersion}` : "";
+  setText(replayEls.info, `${replay.fileName || ""} · ${clock} · ${counts}${sys}${ver}`);
+}
+
+function replaySetMode(mode) {
+  const avail = replayModeAvailability(replay.allEntries);
+  if (!avail[mode]) mode = avail.raw ? "raw" : avail.ws ? "ws" : "dashboard";
+  replay.mode = mode;
+  if (replayEls.mode) {
+    replayEls.mode.value = mode;
+    for (const opt of replayEls.mode.options) opt.disabled = !avail[opt.value];
+  }
+  replay.entries = replayFilterEntries(mode);
+  const keyed = replay.entries.filter((e) => e.kind !== "system");
+  replay.t0 = keyed.length ? keyed[0].ts_ms : replay.entries[0]?.ts_ms || 0;
+  replay.t1 = keyed.length ? keyed[keyed.length - 1].ts_ms : replay.t0;
+  const wasPlaying = replay.playing;
+  replaySetPlaying(false);
+  replaySeekTo(replay.t0);
+  if (wasPlaying) replaySetPlaying(true);
+}
+
+function replayStart(fileName, data) {
+  const raw = Array.isArray(data) ? data : Array.isArray(data?.entries) ? data.entries : null;
+  if (!raw) throw new Error("El archivo no contiene 'entries'.");
+  const entries = raw
+    .filter((e) => e && typeof e.ts_ms === "number" && Number.isFinite(e.ts_ms) && typeof e.kind === "string")
+    .sort((a, b) => a.ts_ms - b.ts_ms);
+  const avail = replayModeAvailability(entries);
+  if (!avail.raw && !avail.ws && !avail.dashboard) {
+    throw new Error("La sesión no tiene datos reproducibles (ble_rx / ws_msg / dashboard).");
+  }
+
+  if (!replay.active) {
+    let marksRaw = null;
+    try {
+      marksRaw = localStorage.getItem(LOCAL_MARKS_KEY);
+    } catch {
+      // ignore
+    }
+    replay.saved = {
+      useLocalMarks,
+      localMarks: recClone(localMarks),
+      marksRaw,
+      recWasActive: sessionRec.active,
+    };
+    if (sessionRec.active) recSetActive(false);
+    wakeLockMgr.setRequested(false);
+    bgMgr.setRequested(false);
+  }
+
+  replay.active = true;
+  replay.fileName = fileName;
+  replay.meta = data?.meta || null;
+  replay.allEntries = entries;
+  document.body.classList.add("is-replay");
+  if (replayEls.bar) replayEls.bar.hidden = false;
+  if (els.recToggle) els.recToggle.disabled = true;
+  replaySetMode(replayEls.mode?.value || "raw");
+  replaySetPlaying(true);
+}
+
+function replayStop() {
+  if (!replay.active) return;
+  replaySetPlaying(false);
+  replay.active = false;
+  replay.allEntries = [];
+  replay.entries = [];
+  replay.client = null;
+  document.body.classList.remove("is-replay");
+  if (replayEls.bar) replayEls.bar.hidden = true;
+  if (els.recToggle) els.recToggle.disabled = false;
+
+  // Restaura marcas locales (el replay puede haber movido la línea de salida "auto").
+  const saved = replay.saved || {};
+  try {
+    if (saved.marksRaw === null || saved.marksRaw === undefined) localStorage.removeItem(LOCAL_MARKS_KEY);
+    else localStorage.setItem(LOCAL_MARKS_KEY, saved.marksRaw);
+  } catch {
+    // ignore
+  }
+  localMarks = ensureMarksShape(saved.localMarks || loadLocalMarks() || {});
+  useLocalMarks = saved.useLocalMarks ?? true;
+  replay.saved = null;
+
+  resetPerfSeries();
+  trackPoints = [];
+  lastTrackTsMs = null;
+  for (const k of Object.keys(dampingState)) dampingState[k] = null;
+  if (useLocalMarks) applyLocalMarksToUi();
+
+  const liveConnected = !!bleClient?.server?.connected;
+  applyState({
+    ...(lastState || {}),
+    connected: liveConnected,
+    device_address: liveConnected ? bleClient?.device?.name || "Atlas" : null,
+    last_event_ts_ms: null,
+    last_error: null,
+    marks: useLocalMarks ? localMarks : lastState?.marks,
+  });
+  if (liveConnected) {
+    if (els.bleWakeLock?.checked) wakeLockMgr.setRequested(true);
+    if (els.bleBackground?.checked) bgMgr.setRequested(true);
+  }
+}
+
+replayEls.open?.addEventListener("click", () => replayEls.file?.click());
+
+replayEls.file?.addEventListener("change", async () => {
+  const f = replayEls.file.files?.[0];
+  replayEls.file.value = "";
+  if (!f) return;
+  try {
+    const text = await f.text();
+    replayStart(f.name, JSON.parse(text));
+  } catch (err) {
+    alert(`No se pudo cargar la sesión: ${err?.message || err}`);
+  }
+});
+
+replayEls.play?.addEventListener("click", () => replaySetPlaying(!replay.playing));
+replayEls.back?.addEventListener("click", () => replaySeekTo(replay.vt - 10000));
+replayEls.fwd?.addEventListener("click", () => {
+  const wasPlaying = replay.playing;
+  replaySetPlaying(false);
+  replayAdvanceTo(Math.min(replay.vt + 10000, replay.t1));
+  replayUpdateUi();
+  if (wasPlaying) replaySetPlaying(true);
+});
+replayEls.speed?.addEventListener("change", () => {
+  const v = parseFloat(replayEls.speed.value);
+  replay.speed = REPLAY_SPEEDS.includes(v) ? v : 1;
+});
+replayEls.mode?.addEventListener("change", () => replaySetMode(replayEls.mode.value));
+replayEls.close?.addEventListener("click", () => replayStop());
+
+replayEls.seek?.addEventListener("input", () => {
+  replay.seeking = true;
+  const dur = Math.max(0, replay.t1 - replay.t0);
+  const pos = (parseInt(replayEls.seek.value, 10) / 1000) * dur;
+  setText(replayEls.time, `${replayFmtClock(pos)} / ${replayFmtClock(dur)}`);
+});
+replayEls.seek?.addEventListener("change", () => {
+  const dur = Math.max(0, replay.t1 - replay.t0);
+  const target = replay.t0 + (parseInt(replayEls.seek.value, 10) / 1000) * dur;
+  replay.seeking = false;
+  const wasPlaying = replay.playing;
+  replaySetPlaying(false);
+  replaySeekTo(target);
+  if (wasPlaying) replaySetPlaying(true);
+});
+
+window.addEventListener("keydown", (e) => {
+  if (!replay.active) return;
+  const tag = (e.target?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "select" || tag === "textarea") return;
+  if (e.key === " ") {
+    e.preventDefault();
+    replaySetPlaying(!replay.playing);
+  } else if (e.key === "ArrowLeft") {
+    replaySeekTo(replay.vt - 10000);
+  } else if (e.key === "ArrowRight") {
+    replayEls.fwd?.click();
+  }
+});
